@@ -56,7 +56,8 @@ public sealed class FuchuNightWindowLights : MonoBehaviour
         foreach (MeshFilter filter in filters)
         {
             if (filter == null || !filter.gameObject.activeInHierarchy || filter.sharedMesh == null ||
-                filter.gameObject.name == "FuchuNightWindowQuads" || processedFilters.Contains(filter.GetInstanceID())) continue;
+                filter.gameObject.name == "FuchuNightWindowQuads" ||
+                filter.gameObject.name == FuchuTerritoryBuildings.OverlayName || processedFilters.Contains(filter.GetInstanceID())) continue;
             MeshRenderer sourceRenderer = filter.GetComponent<MeshRenderer>();
             if (sourceRenderer == null || !sourceRenderer.enabled) continue;
             Bounds bounds = sourceRenderer.bounds;
