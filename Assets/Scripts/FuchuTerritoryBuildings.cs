@@ -12,29 +12,29 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
 
     private readonly Transform worldRoot;
     private readonly Material material;
-    private readonly IReadOnlyList<FuchuWalkingTerritory.Region> regions;
+    private readonly FuchuTerritoryShape territory;
     private readonly Dictionary<CesiumModelMetadata, LoadedModel> models = new Dictionary<CesiumModelMetadata, LoadedModel>();
     private readonly HashSet<string> capturedIds = new HashSet<string>(StringComparer.Ordinal);
     private readonly Dictionary<MeshRenderer, Material[]> facadeMaterials = new Dictionary<MeshRenderer, Material[]>();
     private readonly Cesium3DTileset tileset;
     private float nextScan;
-    private int scannedRegionCount;
+    private int scannedVersion;
 
-    public FuchuTerritoryBuildings(Transform worldRoot, Material material, IReadOnlyList<FuchuWalkingTerritory.Region> regions)
+    public FuchuTerritoryBuildings(Transform worldRoot, Material material, FuchuTerritoryShape territory)
     {
         this.worldRoot = worldRoot;
         this.material = material;
-        this.regions = regions;
+        this.territory = territory;
         tileset = worldRoot != null ? worldRoot.GetComponentInChildren<Cesium3DTileset>() : Object.FindFirstObjectByType<Cesium3DTileset>();
     }
 
     public void RefreshLoadedBuildings()
     {
         if (tileset == null) return;
-        bool newArea = scannedRegionCount != regions.Count;
+        bool newArea = scannedVersion != territory.Version;
         if (!newArea && Time.unscaledTime < nextScan) return;
         nextScan = Time.unscaledTime + 0.75f;
-        scannedRegionCount = regions.Count;
+        scannedVersion = territory.Version;
 
         var unloaded = new List<CesiumModelMetadata>();
         foreach (var entry in models)
@@ -54,20 +54,15 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
                 model = new LoadedModel();
                 models.Add(metadata, model);
             }
-            if (model.LastCheckedRegionCount == regions.Count) continue;
-            model.LastCheckedRegionCount = regions.Count;
+            if (model.LastCheckedVersion == territory.Version) continue;
+            model.LastCheckedVersion = territory.Version;
             if (model.Primitives.Count == 0) ReadBuildingGeometry(metadata, model);
             foreach (Building building in model.Buildings)
             {
-                if (building.Captured) continue;
-                foreach (FuchuWalkingTerritory.Region region in regions)
-                {
-                    if (!region.Contains((building.Min + building.Max) * 0.5f)) continue;
-                    building.Captured = true;
-                    model.NeedsColorUpdate = true;
-                    if (!string.IsNullOrEmpty(building.Id)) capturedIds.Add(building.Id);
-                    break;
-                }
+                if (building.Captured || !territory.Contains((building.Min + building.Max) * 0.5f)) continue;
+                building.Captured = true;
+                model.NeedsColorUpdate = true;
+                if (!string.IsNullOrEmpty(building.Id)) capturedIds.Add(building.Id);
             }
         }
 
@@ -103,9 +98,9 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
         foreach (CesiumPrimitiveFeatures source in sources)
         {
             if (!source.TryGetComponent(out MeshRenderer renderer)) continue;
-            Rect bounds = ProjectBounds(renderer.bounds);
-            foreach (FuchuWalkingTerritory.Region region in regions)
-                nearArea |= region.Bounds.Overlaps(bounds);
+            if (!territory.Overlaps(ProjectBounds(renderer.bounds))) continue;
+            nearArea = true;
+            break;
         }
         if (!nearArea) return;
 
@@ -306,7 +301,7 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
 
     private sealed class LoadedModel : IDisposable
     {
-        public int LastCheckedRegionCount;
+        public int LastCheckedVersion;
         public bool NeedsColorUpdate;
         public readonly List<Building> Buildings = new List<Building>();
         public readonly List<Primitive> Primitives = new List<Primitive>();

@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using Clipper2Lib;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -8,15 +9,14 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
 {
     private const float SampleSpacing = 0.3f;
     private const float CloseDistance = 0.35f;
-    private const float MinimumArea = 2f;
     private const float FillSpacing = 2.5f;
     private const float FillHeight = 0.07f;
     private const float TrailHeight = 0.13f;
     private static readonly Quaternion TrailRotation = Quaternion.Euler(90f, 0f, 0f);
 
     private readonly List<Vector2> trail = new List<Vector2>();
-    private readonly List<Region> regions = new List<Region>();
-    private readonly List<Mesh> fillMeshes = new List<Mesh>();
+    private readonly FuchuTerritoryShape shape = new FuchuTerritoryShape();
+    private readonly List<LineRenderer> borders = new List<LineRenderer>();
     private readonly List<Collider> ground = new List<Collider>();
     private Transform worldRoot;
     private LineRenderer openLine;
@@ -24,6 +24,9 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private Material fillMaterial;
     private Material buildingMaterial;
     private FuchuTerritoryBuildings buildings;
+    private Coroutine fillJob;
+    private Mesh fillMesh;
+    private MeshFilter fillFilter;
     private float groundSearchHeight;
 
     internal void Initialize(Vector3 playerPosition)
@@ -48,12 +51,12 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         fillMaterial = CreateMaterial(shader, new Color(0.04f, 0.27f, 0.9f, 0.68f), 3000, false);
         buildingMaterial = CreateMaterial(shader, new Color(0.07f, 0.38f, 0.96f), 2010, true);
         openLine = CreateLine("Open trail");
-        buildings = new FuchuTerritoryBuildings(worldRoot, buildingMaterial, regions);
+        buildings = new FuchuTerritoryBuildings(worldRoot, buildingMaterial, shape);
     }
 
     private void Update()
     {
-        if (regions.Count > 0)
+        if (shape.Version > 0)
             buildings.RefreshLoadedBuildings();
     }
 
@@ -74,22 +77,15 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
             return;
         }
 
-        if (trail.Count >= 5 && TryCloseTrail(point, out Region region, out List<int> triangles))
+        if (shape.TryClaimAgainstBoundary(trail, point, CloseDistance, out Paths64 triangles) ||
+            (trail.Count >= 5 && TryCloseTrail(point, out triangles)))
         {
-            regions.Add(region);
-            LineRenderer border = CreateLine("Confirmed border");
-            border.loop = true;
-            border.positionCount = region.Points.Count;
-            for (int i = 0; i < region.Points.Count; i++)
-            {
-                Vector2 edgePoint = region.Points[i];
-                if (!TryGroundPoint(edgePoint, TrailHeight, out Vector3 borderPoint))
-                    borderPoint = new Vector3(edgePoint.x, groundPoint.y, edgePoint.y);
-                border.SetPosition(i, Quaternion.Inverse(TrailRotation) * borderPoint);
-            }
-            StartCoroutine(FillRegion(region, triangles));
+            if (fillJob != null) StopCoroutine(fillJob);
+            fillJob = StartCoroutine(FillTerritory(triangles, groundPoint.y));
             buildings.RefreshLoadedBuildings();
             ClearOpenTrail();
+            // A new trail may start on the border that was just confirmed.
+            shape.TryClaimAgainstBoundary(trail, point, CloseDistance, out _);
         }
 
         trail.Add(point);
@@ -100,10 +96,11 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     public void ClearOpenTrail()
     {
         trail.Clear();
+        shape.ClearOpenTrail();
         if (openLine != null) openLine.positionCount = 0;
     }
 
-    private bool TryCloseTrail(Vector2 point, out Region region, out List<int> triangles)
+    private bool TryCloseTrail(Vector2 point, out Paths64 triangles)
     {
         Vector2 last = trail[trail.Count - 1];
         Vector2 step = point - last;
@@ -111,17 +108,10 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         for (int i = 0; i < trail.Count - 4; i++)
         {
             Vector2 edge = trail[i + 1] - trail[i];
-            Vector2 separation = trail[i] - last;
-            float determinant = Cross(step, edge);
-            if (Mathf.Abs(determinant) > 0.00001f)
+            if (FuchuTerritoryShape.TryIntersect(last, step, trail[i], edge, out float alongStep))
             {
-                float alongStep = Cross(separation, edge) / determinant;
-                float alongEdge = Cross(separation, step) / determinant;
-                if (alongStep > 0.0001f && alongStep <= 1f && alongEdge >= 0f && alongEdge <= 1f)
-                {
-                    crossings.Add((alongStep, i, last + step * alongStep));
-                    continue;
-                }
+                crossings.Add((alongStep, i, last + step * alongStep));
+                continue;
             }
             // Allow reconnecting to the visible stroke without hitting its exact centerline.
             Vector2 closest = trail[i] + edge * Mathf.Clamp01(Vector2.Dot(point - trail[i], edge) / edge.sqrMagnitude);
@@ -141,75 +131,46 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
             }
             if ((polygon[0] - polygon[polygon.Count - 1]).sqrMagnitude < 0.000001f)
                 polygon.RemoveAt(polygon.Count - 1);
-            if (!TryTriangulate(polygon, out triangles)) continue;
-            region = new Region(polygon);
-            return true;
+            if (shape.TryClaimLoop(polygon, out triangles)) return true;
         }
-        region = null;
         triangles = null;
         return false;
     }
 
-    private static bool TryTriangulate(List<Vector2> polygon, out List<int> triangles)
+    private void RedrawBorders(float fallbackHeight)
     {
-        triangles = new List<int>();
-        float twiceArea = 0f;
-        Vector2 origin = polygon[0];
-        for (int i = 1; i + 1 < polygon.Count; i++)
-            twiceArea += Cross(polygon[i] - origin, polygon[i + 1] - origin);
-        if (Mathf.Abs(twiceArea) < 2f * MinimumArea) return false;
-
-        var remaining = new List<int>(polygon.Count);
-        for (int i = 0; i < polygon.Count; i++)
-            remaining.Add(twiceArea > 0f ? i : polygon.Count - 1 - i);
-
-        while (remaining.Count > 2)
+        foreach (LineRenderer border in borders) Destroy(border.gameObject);
+        borders.Clear();
+        Quaternion toLineSpace = Quaternion.Inverse(TrailRotation);
+        foreach (List<Vector2> contour in shape.Contours)
         {
-            bool clipped = false;
-            for (int i = 0; i < remaining.Count; i++)
+            var points = new List<Vector3>();
+            for (int i = 0; i < contour.Count; i++)
             {
-                int previous = remaining[(i + remaining.Count - 1) % remaining.Count];
-                int current = remaining[i];
-                int next = remaining[(i + 1) % remaining.Count];
-                Vector2 a = polygon[previous], b = polygon[current], c = polygon[next];
-                float turn = Cross(b - a, c - b);
-                if (Mathf.Abs(turn) <= 0.02f * (c - a).magnitude && Vector2.Dot(b - a, c - b) >= 0f)
+                Vector2 a = contour[i], b = contour[(i + 1) % contour.Count];
+                int segments = Mathf.Max(1, Mathf.CeilToInt(Vector2.Distance(a, b) / SampleSpacing));
+                for (int j = 0; j < segments; j++)
                 {
-                    remaining.RemoveAt(i);
-                    clipped = true;
-                    break;
+                    Vector2 edge = Vector2.Lerp(a, b, (float)j / segments);
+                    if (!TryGroundPoint(edge, TrailHeight, out Vector3 groundPoint))
+                        groundPoint = new Vector3(edge.x, fallbackHeight, edge.y);
+                    points.Add(toLineSpace * groundPoint);
                 }
-                if (turn <= 0f) continue;
-
-                bool containsVertex = false;
-                foreach (int other in remaining)
-                {
-                    if (other == previous || other == current || other == next) continue;
-                    Vector2 p = polygon[other];
-                    if (Cross(b - a, p - a) >= 0f && Cross(c - b, p - b) >= 0f && Cross(a - c, p - c) >= 0f)
-                    {
-                        containsVertex = true;
-                        break;
-                    }
-                }
-                if (containsVertex) continue;
-                triangles.Add(previous);
-                triangles.Add(current);
-                triangles.Add(next);
-                remaining.RemoveAt(i);
-                clipped = true;
-                break;
             }
-            if (!clipped) return false;
+            LineRenderer border = CreateLine("Confirmed border");
+            border.loop = true;
+            border.positionCount = points.Count;
+            border.SetPositions(points.ToArray());
+            borders.Add(border);
         }
-        return triangles.Count > 0;
     }
 
-    private IEnumerator FillRegion(Region region, List<int> triangles)
+    private IEnumerator FillTerritory(Paths64 triangles, float fallbackHeight)
     {
         var pending = new Stack<(Vector2 A, Vector2 B, Vector2 C)>();
-        for (int i = 0; i < triangles.Count; i += 3)
-            pending.Push((region.Points[triangles[i]], region.Points[triangles[i + 1]], region.Points[triangles[i + 2]]));
+        foreach (Path64 triangle in triangles)
+            pending.Push((FuchuTerritoryShape.ToVector(triangle[0]),
+                FuchuTerritoryShape.ToVector(triangle[1]), FuchuTerritoryShape.ToVector(triangle[2])));
         var vertices = new List<Vector3>();
         var indices = new List<int>();
         var sampled = new Dictionary<Vector2, int>();
@@ -237,17 +198,23 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
             indices.Add(bi);
         }
 
+        RedrawBorders(fallbackHeight);
         if (indices.Count == 0) yield break;
         var mesh = new Mesh { name = "Confirmed blue area", indexFormat = IndexFormat.UInt32 };
         mesh.SetVertices(vertices);
         mesh.SetTriangles(indices, 0);
-        fillMeshes.Add(mesh);
-        var obj = new GameObject("Confirmed blue area");
-        obj.transform.SetParent(transform, false);
-        obj.AddComponent<MeshFilter>().sharedMesh = mesh;
-        MeshRenderer renderer = obj.AddComponent<MeshRenderer>();
-        renderer.sharedMaterial = fillMaterial;
-        renderer.shadowCastingMode = ShadowCastingMode.Off;
+        if (fillFilter == null)
+        {
+            var obj = new GameObject("Confirmed blue area");
+            obj.transform.SetParent(transform, false);
+            fillFilter = obj.AddComponent<MeshFilter>();
+            MeshRenderer renderer = obj.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = fillMaterial;
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+        }
+        fillFilter.sharedMesh = mesh;
+        if (fillMesh != null) Destroy(fillMesh);
+        fillMesh = mesh;
 
         int Sample(Vector2 point)
         {
@@ -312,43 +279,10 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private void OnDestroy()
     {
         buildings?.Dispose();
-        foreach (Mesh mesh in fillMeshes) Destroy(mesh);
+        Destroy(fillMesh);
         Destroy(lineMaterial);
         Destroy(fillMaterial);
         Destroy(buildingMaterial);
     }
 
-    private static float Cross(Vector2 a, Vector2 b) => a.x * b.y - a.y * b.x;
-
-    internal sealed class Region
-    {
-        public readonly List<Vector2> Points;
-        public readonly Rect Bounds;
-
-        public Region(List<Vector2> points)
-        {
-            Points = points;
-            Vector2 min = points[0], max = points[0];
-            foreach (Vector2 point in points)
-            {
-                min = Vector2.Min(min, point);
-                max = Vector2.Max(max, point);
-            }
-            Bounds = Rect.MinMaxRect(min.x, min.y, max.x, max.y);
-        }
-
-        public bool Contains(Vector2 point)
-        {
-            if (!Bounds.Contains(point)) return false;
-            bool inside = false;
-            for (int i = 0, previous = Points.Count - 1; i < Points.Count; previous = i++)
-            {
-                Vector2 a = Points[previous], b = Points[i];
-                if ((a.y > point.y) != (b.y > point.y) &&
-                    point.x < a.x + (b.x - a.x) * (point.y - a.y) / (b.y - a.y))
-                    inside = !inside;
-            }
-            return inside;
-        }
-    }
 }
