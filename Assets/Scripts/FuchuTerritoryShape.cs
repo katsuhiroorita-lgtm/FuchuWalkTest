@@ -171,7 +171,9 @@ internal sealed class FuchuTerritoryShape
         Paths64 union = Clipper.Union(paths, candidate, FillRule.NonZero);
         double area = Clipper.Area(union);
         if (area - ClaimedSquareMeters * UnitsPerSquareMeter < MinimumArea) return false;
-        if (Clipper.Triangulate(union, out triangles, false) != TriangulateResult.success)
+        // Keep the union for gameplay, but build geometry only for the newly claimed ground.
+        Paths64 added = paths.Count == 0 ? union : Clipper.Difference(union, paths, FillRule.NonZero);
+        if (Clipper.Triangulate(added, out triangles, false) != TriangulateResult.success)
             return false;
         paths = union;
         ClaimedSquareMeters = area / UnitsPerSquareMeter;

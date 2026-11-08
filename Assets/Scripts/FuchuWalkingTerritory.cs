@@ -19,15 +19,15 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private readonly FuchuTerritoryShape shape = new FuchuTerritoryShape();
     private readonly List<LineRenderer> borders = new List<LineRenderer>();
     private readonly List<Collider> ground = new List<Collider>();
+    private readonly Queue<(Paths64 Triangles, float BorderHeight)> pendingFills = new Queue<(Paths64, float)>();
+    private readonly List<Mesh> fillMeshes = new List<Mesh>();
     private Transform worldRoot;
     private LineRenderer openLine;
     private Material lineMaterial;
     private Material fillMaterial;
     private Material buildingMaterial;
     private FuchuTerritoryBuildings buildings;
-    private Coroutine fillJob;
-    private Mesh fillMesh;
-    private MeshFilter fillFilter;
+    private bool fillingGround;
     private float groundSearchHeight;
 
     public double Coverage => shape.ClaimedSquareMeters / PlayableGroundArea;
@@ -78,8 +78,12 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         if (shape.TryClaimAgainstBoundary(trail, point, CloseDistance, out Paths64 triangles) ||
             (trail.Count >= 5 && TryCloseTrail(point, out triangles)))
         {
-            if (fillJob != null) StopCoroutine(fillJob);
-            fillJob = StartCoroutine(FillTerritory(triangles, groundPoint.y));
+            pendingFills.Enqueue((triangles, groundPoint.y));
+            if (!fillingGround)
+            {
+                fillingGround = true;
+                StartCoroutine(DrawPendingGround());
+            }
             buildings.RefreshLoadedBuildings();
             ClearOpenTrail();
             // A new trail may start on the border that was just confirmed.
@@ -163,7 +167,18 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         }
     }
 
-    private IEnumerator FillTerritory(Paths64 triangles, float fallbackHeight)
+    private IEnumerator DrawPendingGround()
+    {
+        while (pendingFills.Count > 0)
+        {
+            var fill = pendingFills.Dequeue();
+            yield return FillNewGround(fill.Triangles);
+            if (pendingFills.Count == 0) RedrawBorders(fill.BorderHeight);
+        }
+        fillingGround = false;
+    }
+
+    private IEnumerator FillNewGround(Paths64 triangles)
     {
         var pending = new Stack<(Vector2 A, Vector2 B, Vector2 C)>();
         foreach (Path64 triangle in triangles)
@@ -196,23 +211,17 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
             indices.Add(bi);
         }
 
-        RedrawBorders(fallbackHeight);
         if (indices.Count == 0) yield break;
         var mesh = new Mesh { name = "Confirmed blue area", indexFormat = IndexFormat.UInt32 };
         mesh.SetVertices(vertices);
         mesh.SetTriangles(indices, 0);
-        if (fillFilter == null)
-        {
-            var obj = new GameObject("Confirmed blue area");
-            obj.transform.SetParent(transform, false);
-            fillFilter = obj.AddComponent<MeshFilter>();
-            MeshRenderer renderer = obj.AddComponent<MeshRenderer>();
-            renderer.sharedMaterial = fillMaterial;
-            renderer.shadowCastingMode = ShadowCastingMode.Off;
-        }
-        fillFilter.sharedMesh = mesh;
-        if (fillMesh != null) Destroy(fillMesh);
-        fillMesh = mesh;
+        fillMeshes.Add(mesh);
+        var obj = new GameObject("Confirmed blue area");
+        obj.transform.SetParent(transform, false);
+        obj.AddComponent<MeshFilter>().sharedMesh = mesh;
+        MeshRenderer renderer = obj.AddComponent<MeshRenderer>();
+        renderer.sharedMaterial = fillMaterial;
+        renderer.shadowCastingMode = ShadowCastingMode.Off;
 
         int Sample(Vector2 point)
         {
@@ -277,7 +286,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private void OnDestroy()
     {
         buildings?.Dispose();
-        Destroy(fillMesh);
+        foreach (Mesh mesh in fillMeshes) Destroy(mesh);
         Destroy(lineMaterial);
         Destroy(fillMaterial);
         Destroy(buildingMaterial);
