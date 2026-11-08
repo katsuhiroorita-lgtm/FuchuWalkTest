@@ -23,10 +23,22 @@ public sealed class FuchuWalkController : MonoBehaviour
     private const float CameraClearanceAbovePlayer = 0.6f;
     private const float CameraCollisionRadius = 0.16f;
 
+    // Local XZ positions on SampleScene's 1 km road mesh.
+    private static readonly Vector2[] SpawnPoints =
+    {
+        new Vector2(462.352f, -526.300f),
+        new Vector2(596.404f, -117.915f),
+        new Vector2(179.578f, -133.355f),
+        new Vector2(-165.796f, 107.811f),
+        new Vector2(-300.892f, -259.761f),
+        new Vector2(-638.146f, -511.839f),
+        new Vector2(-281.208f, -790.964f),
+        new Vector2(-159.809f, -1180.894f),
+        new Vector2(217.970f, -874.823f),
+        new Vector2(582.587f, -869.466f)
+    };
+
     [SerializeField] private Transform cameraTransform;
-    [SerializeField] private MeshCollider spawnRoad;
-    [Tooltip("Start points in the road mesh's local XZ coordinates.")]
-    [SerializeField] private Vector2[] spawnPoints;
     [SerializeField] private float walkSpeed = 4.5f;
     [SerializeField] private float sprintSpeed = 7f;
     [SerializeField] private float lookSensitivity = 0.12f;
@@ -79,21 +91,22 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     private void ChooseStartingPosition()
     {
-        if (spawnRoad == null || !spawnRoad.enabled || !spawnRoad.gameObject.activeInHierarchy ||
-            spawnRoad.sharedMesh == null || spawnPoints == null || spawnPoints.Length == 0)
+        Transform road = transform.parent != null ? transform.parent.Find("FuchuLocalRoads_1000m") : null;
+        if (road == null || !road.gameObject.activeInHierarchy ||
+            !road.TryGetComponent(out MeshCollider spawnRoad) || !spawnRoad.enabled || spawnRoad.sharedMesh == null)
             return;
 
-        Transform road = spawnRoad.transform;
         Bounds roadBounds = spawnRoad.sharedMesh.bounds;
         Vector3 up = transform.up;
         Vector3 footOffset = transform.TransformVector(characterController.center - Vector3.up * (characterController.height * 0.5f));
         float radius = characterController.radius;
         float height = characterController.height;
         float lift = characterController.skinWidth + 0.02f;
-        var validPositions = new List<Vector3>(spawnPoints.Length);
+        var validPositions = new List<Vector3>(SpawnPoints.Length);
 
         characterController.enabled = false;
-        foreach (Vector2 point in spawnPoints)
+        Physics.SyncTransforms();
+        foreach (Vector2 point in SpawnPoints)
         {
             Vector3 rayStart = road.TransformPoint(new Vector3(point.x, roadBounds.max.y + 1f, point.y));
             if (!spawnRoad.Raycast(new Ray(rayStart, -road.up), out RaycastHit hit, roadBounds.size.y + 2f) ||
@@ -110,6 +123,10 @@ public sealed class FuchuWalkController : MonoBehaviour
         {
             transform.position = validPositions[Random.Range(0, validPositions.Count)];
             startingPosition = transform.localPosition;
+        }
+        else
+        {
+            Debug.LogWarning("開始地点の10候補に立てる場所が見つからなかったため、従来の開始地点を使います。", this);
         }
         characterController.enabled = true;
     }
