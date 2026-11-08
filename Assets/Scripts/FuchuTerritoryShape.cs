@@ -12,6 +12,7 @@ internal sealed class FuchuTerritoryShape
     private Paths64 paths = new Paths64();
     private readonly List<List<Vector2>> contours = new List<List<Vector2>>();
     private readonly List<Rect> bounds = new List<Rect>();
+    private readonly List<(Contact Start, Contact End)> boundaryLinks = new List<(Contact, Contact)>();
     private Contact? departure;
     private bool walkedOutside;
 
@@ -44,6 +45,7 @@ internal sealed class FuchuTerritoryShape
 
     public void ClearOpenTrail()
     {
+        boundaryLinks.Clear();
         departure = null;
         walkedOutside = false;
     }
@@ -63,17 +65,10 @@ internal sealed class FuchuTerritoryShape
         foreach (Contact contact in contacts)
         {
             RecordOutsideSegment(last, point, previous, contact.AlongStep);
-            if (walkedOutside && departure is Contact start && start.Contour == contact.Contour &&
-                trail.Count - start.TrailIndex >= 2)
+            if (walkedOutside && departure is Contact start && trail.Count - start.TrailIndex >= 2)
             {
-                Paths64 forward = Normalize(FollowBoundary(trail, start, contact, 1));
-                Paths64 backward = Normalize(FollowBoundary(trail, start, contact, -1));
-                double forwardArea = Clipper.Area(Clipper.Difference(forward, paths, FillRule.NonZero));
-                double backwardArea = Clipper.Area(Clipper.Difference(backward, paths, FillRule.NonZero));
-                // The trail can close along either side of a contour. Claim the smaller new pocket.
-                Paths64 candidate = backwardArea >= MinimumArea &&
-                    (forwardArea < MinimumArea || backwardArea < forwardArea) ? backward : forward;
-                if (TryClaim(candidate, out triangles)) return true;
+                if (TryClaimFromBoundaryLink(trail, start, contact, out triangles)) return true;
+                if (start.Contour != contact.Contour) boundaryLinks.Add((start, contact));
             }
             departure = contact;
             walkedOutside = false;
@@ -135,24 +130,84 @@ internal sealed class FuchuTerritoryShape
         return along > 0.0001f && along <= 1f && alongEdge >= 0f && alongEdge <= 1f;
     }
 
-    private Path64 FollowBoundary(List<Vector2> trail, Contact start, Contact end, int direction)
+    private bool TryClaimFromBoundaryLink(List<Vector2> trail, Contact start, Contact end, out Paths64 triangles)
     {
-        List<Vector2> contour = contours[start.Contour];
-        var polygon = new Path64 { ToPoint(InsideEdge(contour, start)) };
-        for (int i = start.TrailIndex; i < trail.Count; i++)
-            polygon.Add(ToPoint(trail[i]));
-        polygon.Add(ToPoint(InsideEdge(contour, end)));
+        Paths64 best = null;
+        double bestArea = double.PositiveInfinity;
+        if (start.Contour == end.Contour)
+        {
+            for (int direction = 1; direction >= -1; direction -= 2)
+            {
+                var polygon = new Path64();
+                AppendTrail(polygon, trail, start, end, false);
+                AppendBoundary(polygon, end, start, direction);
+                Consider(polygon);
+            }
+        }
+        else
+        {
+            // A second link can close a pocket using an arc from each of the two contours.
+            foreach (var link in boundaryLinks)
+            {
+                bool sameDirection = link.Start.Contour == start.Contour && link.End.Contour == end.Contour;
+                bool oppositeDirection = link.Start.Contour == end.Contour && link.End.Contour == start.Contour;
+                if (!sameDirection && !oppositeDirection) continue;
+                Contact nearStart = sameDirection ? link.Start : link.End;
+                Contact nearEnd = sameDirection ? link.End : link.Start;
 
-        int edge = end.Edge;
+                for (int endDirection = 1; endDirection >= -1; endDirection -= 2)
+                {
+                    for (int startDirection = 1; startDirection >= -1; startDirection -= 2)
+                    {
+                        var polygon = new Path64();
+                        AppendTrail(polygon, trail, start, end, false);
+                        AppendBoundary(polygon, end, nearEnd, endDirection);
+                        AppendTrail(polygon, trail, link.Start, link.End, sameDirection);
+                        AppendBoundary(polygon, nearStart, start, startDirection);
+                        Consider(polygon);
+                    }
+                }
+            }
+        }
+
+        triangles = null;
+        return best != null && TryClaim(best, out triangles);
+
+        void Consider(Path64 polygon)
+        {
+            Paths64 candidate = Normalize(polygon);
+            double area = Clipper.Area(Clipper.Difference(candidate, paths, FillRule.NonZero));
+            if (area < MinimumArea || area >= bestArea) return;
+            bestArea = area;
+            best = candidate;
+        }
+    }
+
+    private void AppendTrail(Path64 polygon, List<Vector2> trail, Contact start, Contact end, bool reverse)
+    {
+        Contact first = reverse ? end : start;
+        Contact last = reverse ? start : end;
+        polygon.Add(ToPoint(InsideEdge(contours[first.Contour], first)));
+        for (int i = start.TrailIndex; i < end.TrailIndex; i++)
+        {
+            int index = reverse ? end.TrailIndex - 1 - (i - start.TrailIndex) : i;
+            polygon.Add(ToPoint(trail[index]));
+        }
+        polygon.Add(ToPoint(InsideEdge(contours[last.Contour], last)));
+    }
+
+    private void AppendBoundary(Path64 polygon, Contact from, Contact to, int direction)
+    {
+        List<Vector2> contour = contours[from.Contour];
+        int edge = from.Edge;
         Vector2 edgeDirection = contour[(edge + 1) % contour.Count] - contour[edge];
-        if (edge == start.Edge && direction * Vector2.Dot(start.Point - end.Point, edgeDirection) >= 0f)
-            return polygon;
+        if (edge == to.Edge && direction * Vector2.Dot(to.Point - from.Point, edgeDirection) >= 0f)
+            return;
         do
         {
             polygon.Add(ToPoint(contour[direction > 0 ? (edge + 1) % contour.Count : edge]));
             edge = (edge + direction + contour.Count) % contour.Count;
-        } while (edge != start.Edge);
-        return polygon;
+        } while (edge != to.Edge);
     }
 
     private static Vector2 InsideEdge(List<Vector2> contour, Contact contact)
