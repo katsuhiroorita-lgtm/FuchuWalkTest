@@ -17,7 +17,8 @@ public sealed class FuchuWalkController : MonoBehaviour
     private const float DefaultCameraPitch = 22f;
     private const float MinCameraPitch = -55f;
     private const float MaxCameraPitch = 60f;
-    private const float CameraDistance = 3.6f;
+    // Leave room below the player's feet for the trail even when looking straight ahead.
+    private const float CameraDistance = 6.2f;
     private const float CameraClearanceAbovePlayer = 0.6f;
     private const float CameraCollisionRadius = 0.16f;
 
