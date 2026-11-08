@@ -9,6 +9,7 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
     [SerializeField] private float maxDistance = 2000f;
     [SerializeField] private float targetScanInterval = 0.12f;
 
+    private readonly Dictionary<string, string> buildingNames = new Dictionary<string, string>(System.StringComparer.Ordinal);
     private float nextTargetScanTime;
     private FuchuWalkController player;
     private string currentFeatureKey = "";
@@ -24,6 +25,16 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
     {
         if (targetCamera == null) targetCamera = Camera.main;
         if (targetCamera != null) player = targetCamera.GetComponentInParent<FuchuWalkController>();
+        TextAsset catalog = Resources.Load<TextAsset>("FuchuBuildingNames");
+        if (catalog == null) return;
+        foreach (string line in catalog.text.Split('\n'))
+        {
+            if (!line.StartsWith("bldg_", System.StringComparison.Ordinal)) continue;
+            int separator = line.IndexOf('\t');
+            if (separator < 0) continue;
+            string name = line.Substring(separator + 1).Trim();
+            if (name.Length > 0) buildingNames.TryAdd(line.Substring(0, separator), name);
+        }
     }
 
     private void Update()
@@ -111,18 +122,21 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
         }
 
         Dictionary<string, CesiumMetadataValue> values = table.GetMetadataValuesForFeature(featureId);
-        string buildingId = ReadString(values, "gml_id", "");
+        string buildingId = ReadString(values, "gml_id", "").Trim();
         string usage = ReadString(values, "bldg:usage", "");
         double height = ReadNumber(values, "bldg:measuredHeight", -1.0);
         double floorArea = EstimateFloorArea(values, out double footprintArea, out int floors);
 
-        if (string.IsNullOrWhiteSpace(buildingId)) buildingId = "（IDなし）";
-        if (string.IsNullOrWhiteSpace(usage)) usage = "（用途情報なし）";
-        string usageText = UsageName(usage);
+        string usageCode = NormalizeUsageCode(usage);
+        string usageName = UsageName(usageCode);
+        string usageText = int.TryParse(usageCode, out _) ? $"{usageCode}（{usageName}）" : usageName;
+        string displayName = buildingNames.TryGetValue(buildingId, out string registeredName) ? registeredName : usageName;
+        if (buildingId.Length == 0) buildingId = "（IDなし）";
         string heightText = height >= 0.0 ? height.ToString("0.##") + " m" : "（不明）";
         string floorText = floors >= 0 && floors != 9999 ? floors.ToString() + " 階" : "（不明）";
 
-        string nextInfo = "建物ID: " + buildingId + "\n用途: " + usageText + "\n高さ: " + heightText + "\n地上階数: " + floorText;
+        string nextInfo = "建物名: " + displayName + "\n建物ID: " + buildingId + "\n用途: " + usageText +
+            "\n高さ: " + heightText + "\n地上階数: " + floorText;
         bool canEstimateFloorArea = floorArea > 0.0;
         if (canEstimateFloorArea)
         {
@@ -165,7 +179,7 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
     {
         EnsureStyles();
         const float width = 470f;
-        float panelHeight = string.IsNullOrEmpty(selectedInfo) ? 82f : 267f;
+        float panelHeight = string.IsNullOrEmpty(selectedInfo) ? 82f : 289f;
         float left = Screen.width - width - 16f;
         GUI.Box(new Rect(left, 16f, width, panelHeight), GUIContent.none, panelStyle);
         GUI.Label(new Rect(left + 14f, 22f, width - 28f, 24f), "建物情報（中央の照準で自動表示）", textStyle);
@@ -291,24 +305,25 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
     {
         switch (usage)
         {
-            case "401": return "401（業務施設）";
-            case "402": return "402（商業施設）";
-            case "403": return "403（宿泊施設）";
-            case "411": return "411（住宅）";
-            case "412": return "412（共同住宅）";
-            case "413": return "413（店舗等併用住宅）";
-            case "414": return "414（店舗等併用共同住宅）";
-            case "415": return "415（作業所併用住宅）";
-            case "421": return "421（官公庁施設）";
-            case "422": return "422（文教厚生施設）";
-            case "431": return "431（運輸倉庫施設）";
-            case "441": return "441（工場）";
-            case "451": return "451（農林漁業用施設）";
-            case "452": return "452（供給処理施設）";
-            case "453": return "453（防衛施設）";
-            case "454": return "454（その他）";
-            case "461": return "461（不明）";
-            default: return usage;
+            case "401": return "業務施設";
+            case "402": return "商業施設";
+            case "403": return "宿泊施設";
+            case "404": return "商業系複合施設";
+            case "411": return "住宅";
+            case "412": return "共同住宅";
+            case "413": return "店舗等併用住宅";
+            case "414": return "店舗等併用共同住宅";
+            case "415": return "作業所併用住宅";
+            case "421": return "官公庁施設";
+            case "422": return "文教厚生施設";
+            case "431": return "運輸倉庫施設";
+            case "441": return "工場";
+            case "451": return "農林漁業用施設";
+            case "452": return "供給処理施設";
+            case "453": return "防衛施設";
+            case "454": return "その他";
+            case "461": return "用途不明";
+            default: return usage.Length == 0 || int.TryParse(usage, out _) ? "用途不明" : usage;
         }
     }
 }

@@ -114,10 +114,10 @@ public sealed class FuchuWalkHud : MonoBehaviour
         if (creditsVisible)
         {
             float y = timeMenuVisible ? 336f : 204f;
-            GUI.Box(new Rect(16, y, 520, 122), GUIContent.none, panelStyle);
+            GUI.Box(new Rect(16, y, 520, 144), GUIContent.none, panelStyle);
             GUI.Label(new Rect(30, y + 8, 490, 28), "使用データの出典", headingStyle);
-            GUI.Label(new Rect(30, y + 40, 490, 76),
-                "出典：3D都市モデル（Project PLATEAU）東京都府中市（2025年度）\n建物・地形・道路データを加工して作成\n配布元：G空間情報センター／利用条件は配布ページを参照",
+            GUI.Label(new Rect(30, y + 40, 490, 96),
+                "出典：3D都市モデル（Project PLATEAU）東京都府中市（2025年度）\n建物・地形・道路データを加工して作成\n配布元：G空間情報センター／利用条件は配布ページを参照\n施設名の一部は府中市オープンデータ（公共施設・観光施設一覧）をもとに照合",
                 textStyle);
         }
     }
