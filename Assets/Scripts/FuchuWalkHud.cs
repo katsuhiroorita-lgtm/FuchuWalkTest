@@ -29,6 +29,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
     private GUIStyle headingStyle;
     private GUIStyle textStyle;
     private GUIStyle resultTitleStyle;
+    private string startMenuMessage = "";
 
     public bool TimeMenuVisible => timeMenuVisible;
     public float NightFactor
@@ -56,7 +57,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
 
     private void Update()
     {
-        if (player != null && player.RunFinished) return;
+        if (player != null && !player.IsPlaying) return;
 
         Keyboard keyboard = Keyboard.current;
         if (keyboard != null)
@@ -93,9 +94,9 @@ public sealed class FuchuWalkHud : MonoBehaviour
     private void OnGUI()
     {
         EnsureStyles();
-        if (player != null && player.RunFinished)
+        if (player != null && !player.IsPlaying)
         {
-            DrawResults();
+            DrawMenuScreen();
             return;
         }
         if (raining) DrawRain();
@@ -155,7 +156,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
             $"エリア内の建物ポイント  {player.BuildingPoints:N0} pt", textStyle);
     }
 
-    private void DrawResults()
+    private void DrawMenuScreen()
     {
         int previousDepth = GUI.depth;
         Color previousColor = GUI.color;
@@ -166,7 +167,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.color = previousColor;
 
         const float width = 480f;
-        const float height = 510f;
+        float height = player.RunFinished ? 510f : 330f;
         float scale = Mathf.Min(1f, Mathf.Min((Screen.width - 20f) / width, (Screen.height - 20f) / height));
         if (scale <= 0f)
         {
@@ -176,6 +177,25 @@ public sealed class FuchuWalkHud : MonoBehaviour
         var position = new Vector3((Screen.width - width * scale) * 0.5f, (Screen.height - height * scale) * 0.5f, 0f);
         GUI.matrix = Matrix4x4.TRS(position, Quaternion.identity, new Vector3(scale, scale, 1f));
         GUI.Box(new Rect(0, 0, width, height), GUIContent.none, panelStyle);
+        if (player.RunFinished)
+            DrawResults();
+        else
+            DrawStartMenu();
+        GUI.matrix = previousMatrix;
+        GUI.depth = previousDepth;
+    }
+
+    private void DrawStartMenu()
+    {
+        GUI.Label(new Rect(24, 24, 432, 40), "府中まち歩き", resultTitleStyle);
+        if (GUI.Button(new Rect(120, 89, 240, 44), "Game Start")) player.BeginRun();
+        if (GUI.Button(new Rect(120, 145, 240, 44), "Option")) startMenuMessage = "Optionは準備中です。";
+        if (GUI.Button(new Rect(120, 201, 240, 44), "Exit")) startMenuMessage = "Exitは準備中です。";
+        GUI.Label(new Rect(120, 263, 240, 32), startMenuMessage, textStyle);
+    }
+
+    private void DrawResults()
+    {
         GUI.Label(new Rect(24, 18, 432, 38), "タイムアップ", resultTitleStyle);
         GUI.Label(new Rect(32, 69, 416, 26), $"確定エリア面積  {player.TerritoryCoverage * 100.0:0.0000}%", headingStyle);
         GUI.Label(new Rect(32, 100, 416, 26), $"延床面積ポイント合計  {player.BuildingPoints:N0} pt", headingStyle);
@@ -194,12 +214,11 @@ public sealed class FuchuWalkHud : MonoBehaviour
         }
 
         bool previousEnabled = GUI.enabled;
-        GUI.enabled = previousEnabled && !player.RetryPending;
-        bool retry = GUI.Button(new Rect(148, 450, 184, 40), player.RetryPending ? "読み込み中…" : "Retry");
+        GUI.enabled = previousEnabled && !player.ReloadPending;
+        bool retry = GUI.Button(new Rect(48, 450, 184, 40), player.ReloadPending ? "読み込み中…" : "Retry");
+        bool home = GUI.Button(new Rect(248, 450, 184, 40), "Home");
         GUI.enabled = previousEnabled;
-        GUI.matrix = previousMatrix;
-        GUI.depth = previousDepth;
-        if (retry) player.RetryRun();
+        if (retry || home) player.ReloadAfterResult(startImmediately: retry);
     }
 
     private void EnsureStyles()
