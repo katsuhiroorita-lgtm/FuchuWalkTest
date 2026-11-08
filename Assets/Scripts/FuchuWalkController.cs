@@ -11,6 +11,9 @@ public sealed class FuchuWalkController : MonoBehaviour
 {
     private const double BaseStamina = 100.0;
     private const float SprintStaminaPerSecond = 20f;
+    private const double PointsPerSprintBonus = 1000.0;
+    private const float MaximumSprintBonus = 99f;
+    private const float SprintBonusPerSecond = 5f;
 
     private const float DefaultCameraPitch = 22f;
     private const float MinCameraPitch = -55f;
@@ -53,6 +56,7 @@ public sealed class FuchuWalkController : MonoBehaviour
     private MeshRenderer playerRenderer;
     private float playerFootHeight;
     private float stepPhase;
+    private float sprintBonus;
 
     public double Stamina { get; private set; } = BaseStamina;
     public double MaxStamina => BaseStamina + BuildingPoints;
@@ -169,7 +173,16 @@ public sealed class FuchuWalkController : MonoBehaviour
 
         bool sprinting = Stamina > 0.0 && input != Vector2.zero &&
             (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed);
-        float speed = sprinting ? sprintSpeed : walkSpeed;
+        if (sprinting)
+        {
+            float targetBonus = (float)System.Math.Min(MaximumSprintBonus, System.Math.Floor(BuildingPoints / PointsPerSprintBonus));
+            sprintBonus = Mathf.MoveTowards(sprintBonus, targetBonus, SprintBonusPerSecond * Time.deltaTime);
+        }
+        else
+        {
+            sprintBonus = 0f;
+        }
+        float speed = sprinting ? sprintSpeed + sprintBonus : walkSpeed;
         Vector3 horizontalMove = (transform.right * input.x + transform.forward * input.y) * speed;
 
         if (characterController.isGrounded)
@@ -233,6 +246,7 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     private void OnDisable()
     {
+        sprintBonus = 0f;
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
     }
@@ -255,6 +269,7 @@ public sealed class FuchuWalkController : MonoBehaviour
     public void ReturnToStartingPosition()
     {
         if (territory != null) territory.ClearOpenTrail();
+        sprintBonus = 0f;
         characterController.enabled = false;
         transform.SetLocalPositionAndRotation(startingPosition, startingRotation);
         cameraPitch = DefaultCameraPitch;
