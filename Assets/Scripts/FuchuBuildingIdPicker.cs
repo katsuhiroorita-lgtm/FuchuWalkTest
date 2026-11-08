@@ -128,8 +128,12 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
         {
             nextInfo += "\n建築面積: 約" + footprintArea.ToString("N1") + " m²";
             nextInfo += $"\n延床面積の目安: 約{RoundFloorArea(floorArea):N0} m²";
-            nextInfo += $"\n延床面積ポイント: {FloorAreaPoints(floorArea):N0} pt";
         }
+        else
+        {
+            nextInfo += "\n延床面積の目安: （不明）";
+        }
+        nextInfo += $"\n延床面積ポイント: {FloorAreaPoints(floorArea):N0} pt";
         if (IsResidentialUsage(usage))
         {
             if (canEstimateFloorArea)
@@ -234,7 +238,8 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
         return footprintArea > 0.0 && floors > 0 && floors != 9999 && !double.IsInfinity(area) ? area : 0.0;
     }
 
-    internal static double FloorAreaPoints(double floorArea) => RoundFloorArea(floorArea) * 10.0;
+    internal static double FloorAreaPoints(double floorArea) =>
+        floorArea > 0.0 ? RoundFloorArea(floorArea) : 100.0;
 
     private static double RoundFloorArea(double floorArea) =>
         System.Math.Round(floorArea, System.MidpointRounding.AwayFromZero);

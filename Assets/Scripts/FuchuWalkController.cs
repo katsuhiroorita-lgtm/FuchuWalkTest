@@ -11,8 +11,6 @@ public sealed class FuchuWalkController : MonoBehaviour
 {
     private const double BaseStamina = 100.0;
     private const float SprintStaminaPerSecond = 20f;
-    private const float RecoveryStaminaPerSecond = 10f;
-    private const float RecoveryDelay = 1f;
 
     private const float DefaultCameraPitch = 22f;
     private const float MinCameraPitch = -55f;
@@ -55,7 +53,6 @@ public sealed class FuchuWalkController : MonoBehaviour
     private MeshRenderer playerRenderer;
     private float playerFootHeight;
     private float stepPhase;
-    private float recoveryDelayRemaining;
 
     public double Stamina { get; private set; } = BaseStamina;
     public double MaxStamina => BaseStamina + BuildingPoints;
@@ -170,9 +167,8 @@ public sealed class FuchuWalkController : MonoBehaviour
         if (keyboard.aKey.isPressed) input.x -= 1f;
         input = Vector2.ClampMagnitude(input, 1f);
 
-        bool sprintRequested = input != Vector2.zero &&
+        bool sprinting = Stamina > 0.0 && input != Vector2.zero &&
             (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed);
-        bool sprinting = sprintRequested && Stamina > 0f;
         float speed = sprinting ? sprintSpeed : walkSpeed;
         Vector3 horizontalMove = (transform.right * input.x + transform.forward * input.y) * speed;
 
@@ -191,7 +187,8 @@ public sealed class FuchuWalkController : MonoBehaviour
         characterController.Move(velocity * Time.deltaTime);
 
         float groundSpeed = Vector3.ProjectOnPlane(characterController.velocity, transform.up).magnitude;
-        UpdateStamina(sprintRequested, sprinting && groundSpeed > 0.05f, Time.deltaTime);
+        if (sprinting && groundSpeed > 0.05f)
+            Stamina = System.Math.Max(0.0, Stamina - SprintStaminaPerSecond * Time.deltaTime);
         if (groundSpeed > 0.05f) territory.RecordGroundStep(transform.position);
         double earnedPoints = territory.BuildingPoints - BuildingPoints;
         if (earnedPoints > 0.0)
@@ -209,21 +206,6 @@ public sealed class FuchuWalkController : MonoBehaviour
             stepPhase = 0f;
             playerMesh.transform.localPosition = Vector3.up * playerFootHeight;
         }
-    }
-
-    private void UpdateStamina(bool sprintRequested, bool sprintMoved, float deltaTime)
-    {
-        if (sprintRequested)
-        {
-            recoveryDelayRemaining = RecoveryDelay;
-            if (sprintMoved)
-                Stamina = System.Math.Max(0.0, Stamina - SprintStaminaPerSecond * deltaTime);
-            return;
-        }
-
-        float recoveryTime = Mathf.Max(0f, deltaTime - recoveryDelayRemaining);
-        recoveryDelayRemaining = Mathf.Max(0f, recoveryDelayRemaining - deltaTime);
-        Stamina = System.Math.Min(MaxStamina, Stamina + RecoveryStaminaPerSecond * recoveryTime);
     }
 
     private void LateUpdate()
