@@ -20,6 +20,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private readonly List<LineRenderer> borders = new List<LineRenderer>();
     private readonly List<Collider> ground = new List<Collider>();
     private readonly Queue<(Paths64 Triangles, float BorderHeight)> pendingFills = new Queue<(Paths64, float)>();
+    private readonly List<(Paths64 Triangles, float BorderHeight)> gpuFills = new List<(Paths64, float)>();
     private readonly List<Mesh> fillMeshes = new List<Mesh>();
     private Transform worldRoot;
     private LineRenderer openLine;
@@ -27,7 +28,10 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private Material fillMaterial;
     private Material buildingMaterial;
     private FuchuTerritoryBuildings buildings;
+    private FuchuGpuGroundFill gpuGround;
     private bool fillingGround;
+    private bool gpuBordersPending;
+    private float gpuBorderHeight;
     private float groundSearchHeight;
 
     public double Coverage => shape.ClaimedSquareMeters / PlayableGroundArea;
@@ -56,12 +60,28 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         buildingMaterial = CreateMaterial(shader, new Color(0.07f, 0.38f, 0.96f), 2010, true);
         openLine = CreateLine("Open trail");
         buildings = new FuchuTerritoryBuildings(worldRoot, buildingMaterial, shape);
+        gpuGround = FuchuGpuGroundFill.TryCreate(worldRoot, ground, fillMaterial.color);
+        Debug.Log(gpuGround != null ? "エリアの地面描画: GPU" : "エリアの地面描画: 差分メッシュ", this);
     }
 
     private void Update()
     {
         if (shape.Version > 0)
             buildings.RefreshLoadedBuildings();
+    }
+
+    private void LateUpdate()
+    {
+        if (gpuGround == null) return;
+        try
+        {
+            if (gpuGround.TryDraw()) return;
+        }
+        catch (UnityException exception)
+        {
+            Debug.LogWarning("GPU ground overlay failed: " + exception.Message, this);
+        }
+        FallBackToMeshes();
     }
 
     public void RecordGroundStep(Vector3 position)
@@ -79,12 +99,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         if (shape.TryClaimAgainstBoundary(trail, point, CloseDistance, out Paths64 triangles) ||
             (trail.Count >= 5 && TryCloseTrail(point, out triangles)))
         {
-            pendingFills.Enqueue((triangles, groundPoint.y));
-            if (!fillingGround)
-            {
-                fillingGround = true;
-                StartCoroutine(DrawPendingGround());
-            }
+            DrawClaimedGround(triangles, groundPoint.y);
             buildings.RefreshLoadedBuildings();
             ClearOpenTrail();
             // A new trail may start on the border that was just confirmed.
@@ -94,6 +109,53 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         trail.Add(point);
         openLine.positionCount = trail.Count;
         openLine.SetPosition(trail.Count - 1, Quaternion.Inverse(TrailRotation) * groundPoint);
+    }
+
+    private void DrawClaimedGround(Paths64 triangles, float borderHeight)
+    {
+        if (gpuGround == null)
+        {
+            pendingFills.Enqueue((triangles, borderHeight));
+            StartPendingMeshFills();
+            return;
+        }
+
+        gpuFills.Add((triangles, borderHeight));
+        if (!gpuGround.TryStamp(triangles))
+        {
+            FallBackToMeshes();
+            return;
+        }
+
+        gpuBorderHeight = borderHeight;
+        if (gpuBordersPending) return;
+        gpuBordersPending = true;
+        StartCoroutine(RedrawGpuBorders());
+    }
+
+    private IEnumerator RedrawGpuBorders()
+    {
+        // Let the new fill reach the screen before resampling the full outer border.
+        yield return null;
+        gpuBordersPending = false;
+        if (gpuGround != null) RedrawBorders(gpuBorderHeight);
+    }
+
+    private void FallBackToMeshes()
+    {
+        gpuGround.Dispose();
+        gpuGround = null;
+        foreach (var fill in gpuFills) pendingFills.Enqueue(fill);
+        gpuFills.Clear();
+        Debug.LogWarning("GPUで地面を描画できなくなったため、差分メッシュに切り替えます。", this);
+        StartPendingMeshFills();
+    }
+
+    private void StartPendingMeshFills()
+    {
+        if (fillingGround || pendingFills.Count == 0) return;
+        fillingGround = true;
+        StartCoroutine(DrawPendingGround());
     }
 
     public void ClearOpenTrail()
@@ -286,6 +348,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
 
     private void OnDestroy()
     {
+        gpuGround?.Dispose();
         buildings?.Dispose();
         foreach (Mesh mesh in fillMeshes) Destroy(mesh);
         Destroy(lineMaterial);
