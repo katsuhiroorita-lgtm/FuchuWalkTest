@@ -13,7 +13,6 @@ public sealed class FuchuWalkController : MonoBehaviour
     private const float SprintStaminaPerSecond = 20f;
     private const float RecoveryStaminaPerSecond = 10f;
     private const float RecoveryDelay = 1f;
-    private const float GroundContactGrace = 0.15f;
 
     private const float DefaultCameraPitch = 22f;
     private const float MinCameraPitch = -55f;
@@ -48,7 +47,6 @@ public sealed class FuchuWalkController : MonoBehaviour
     private CharacterController characterController;
     private FuchuWalkHud walkHud;
     private FuchuWalkingTerritory territory;
-    private float timeOffGround;
     private float verticalSpeed;
     private float cameraPitch;
     private Vector3 startingPosition;
@@ -60,6 +58,7 @@ public sealed class FuchuWalkController : MonoBehaviour
     private float recoveryDelayRemaining;
 
     public float Stamina { get; private set; } = MaxStamina;
+    public double TerritoryCoverage => territory != null ? territory.Coverage : 0.0;
 
     private void Awake()
     {
@@ -179,10 +178,7 @@ public sealed class FuchuWalkController : MonoBehaviour
         {
             verticalSpeed = -2f;
             if (keyboard.spaceKey.wasPressedThisFrame)
-            {
                 verticalSpeed = Mathf.Sqrt(jumpHeight * -2f * gravity);
-                territory.ClearOpenTrail();
-            }
         }
         else
         {
@@ -194,16 +190,7 @@ public sealed class FuchuWalkController : MonoBehaviour
 
         float groundSpeed = Vector3.ProjectOnPlane(characterController.velocity, transform.up).magnitude;
         UpdateStamina(sprintRequested, sprinting && groundSpeed > 0.05f, Time.deltaTime);
-        if (characterController.isGrounded)
-        {
-            timeOffGround = 0f;
-            if (groundSpeed > 0.05f) territory.RecordGroundStep(transform.position);
-        }
-        else
-        {
-            timeOffGround += Time.deltaTime;
-            if (timeOffGround >= GroundContactGrace) territory.ClearOpenTrail();
-        }
+        if (groundSpeed > 0.05f) territory.RecordGroundStep(transform.position);
         if (characterController.isGrounded && groundSpeed > 0.05f)
         {
             stepPhase = Mathf.Repeat(stepPhase + groundSpeed * Time.deltaTime * 3f, Mathf.PI * 2f);
@@ -256,7 +243,6 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     private void OnDisable()
     {
-        if (territory != null) territory.ClearOpenTrail();
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
     }
@@ -279,7 +265,6 @@ public sealed class FuchuWalkController : MonoBehaviour
     public void ReturnToStartingPosition()
     {
         if (territory != null) territory.ClearOpenTrail();
-        timeOffGround = 0f;
         characterController.enabled = false;
         transform.SetLocalPositionAndRotation(startingPosition, startingRotation);
         cameraPitch = DefaultCameraPitch;

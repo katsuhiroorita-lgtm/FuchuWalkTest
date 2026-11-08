@@ -91,7 +91,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
     {
         EnsureStyles();
         if (raining) DrawRain();
-        if (player != null) DrawStaminaGauge();
+        if (player != null) DrawPlayerStatus();
         if (!visible) return;
 
         GUI.Box(new Rect(16, 16, 366, 178), GUIContent.none, panelStyle);
@@ -122,9 +122,9 @@ public sealed class FuchuWalkHud : MonoBehaviour
         }
     }
 
-    private void DrawStaminaGauge()
+    private void DrawPlayerStatus()
     {
-        Rect panel = new Rect(16f, Screen.height - 76f, 220f, 60f);
+        Rect panel = new Rect(16f, Screen.height - 100f, 220f, 84f);
         GUI.Box(panel, GUIContent.none, panelStyle);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 7f, 196f, 22f),
             $"スタミナ  {Mathf.CeilToInt(player.Stamina)} / {FuchuWalkController.MaxStamina:0}", textStyle);
@@ -137,6 +137,9 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.color = new Color(0.33f, 0.84f, 0.63f);
         GUI.DrawTexture(bar, whiteTexture);
         GUI.color = previous;
+
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 52f, 196f, 22f),
+            $"確定エリア  {player.TerritoryCoverage * 100.0:0.0000}%", textStyle);
     }
 
     private void EnsureStyles()

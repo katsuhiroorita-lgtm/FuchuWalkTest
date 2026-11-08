@@ -12,6 +12,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private const float FillSpacing = 2.5f;
     private const float FillHeight = 0.07f;
     private const float TrailHeight = 0.13f;
+    private const double PlayableGroundArea = System.Math.PI * 1000.0 * 1000.0;
     private static readonly Quaternion TrailRotation = Quaternion.Euler(90f, 0f, 0f);
 
     private readonly List<Vector2> trail = new List<Vector2>();
@@ -28,6 +29,8 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private Mesh fillMesh;
     private MeshFilter fillFilter;
     private float groundSearchHeight;
+
+    public double Coverage => shape.ClaimedSquareMeters / PlayableGroundArea;
 
     internal void Initialize(Vector3 playerPosition)
     {
@@ -65,17 +68,12 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         if (openLine == null) return;
         Vector3 local = ToLocal(position);
         var point = new Vector2(local.x, local.z);
-        if (trail.Count > 0)
-        {
-            float distance = Vector2.Distance(trail[trail.Count - 1], point);
-            if (distance < SampleSpacing) return;
-            if (distance > 3f) ClearOpenTrail();
-        }
-        if (!TryGroundPoint(point, TrailHeight, out Vector3 groundPoint))
-        {
-            ClearOpenTrail();
+        if (trail.Count > 0 && Vector2.Distance(trail[trail.Count - 1], point) < SampleSpacing)
             return;
-        }
+
+        // Project movement onto the ground during jumps as well as when walking.
+        if (!TryGroundPoint(point, TrailHeight, out Vector3 groundPoint))
+            return;
 
         if (shape.TryClaimAgainstBoundary(trail, point, CloseDistance, out Paths64 triangles) ||
             (trail.Count >= 5 && TryCloseTrail(point, out triangles)))

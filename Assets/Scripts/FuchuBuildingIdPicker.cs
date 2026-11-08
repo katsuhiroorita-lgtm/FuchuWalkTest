@@ -124,15 +124,22 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
         string floorText = floors >= 0 && floors != 9999 ? floors.ToString() + " 階" : "（不明）";
 
         string nextInfo = "建物ID: " + buildingId + "\n用途: " + usageText + "\n高さ: " + heightText + "\n地上階数: " + floorText;
+        bool canEstimateFloorArea = footprintArea > 0.0 && floors > 0 && floors != 9999;
+        double floorArea = footprintArea * floors;
+        if (canEstimateFloorArea)
+        {
+            double displayedArea = System.Math.Round(floorArea, System.MidpointRounding.AwayFromZero);
+            nextInfo += "\n建築面積: 約" + footprintArea.ToString("N1") + " m²";
+            nextInfo += $"\n延床面積の目安: 約{displayedArea:N0} m²";
+            nextInfo += $"\n延床面積ポイント: {displayedArea * 10.0:N0} pt";
+        }
         if (IsResidentialUsage(usage))
         {
-            if (footprintArea > 0.0 && floors > 0 && floors != 9999)
+            if (canEstimateFloorArea)
             {
-                double residentialFloorArea = footprintArea * floors * ResidentialShare(usage);
+                double residentialFloorArea = floorArea * ResidentialShare(usage);
                 double areaPerPerson = NormalizeUsageCode(usage) == "412" ? 25.0 : 30.0;
                 int estimatedResidents = Mathf.Max(1, Mathf.RoundToInt((float)(residentialFloorArea / areaPerPerson)));
-                nextInfo += "\n建築面積: 約" + footprintArea.ToString("N1") + " m²";
-                nextInfo += "\n延床面積の目安: 約" + (footprintArea * floors).ToString("N0") + " m²";
                 nextInfo += "\n居住人数の目安: 約" + estimatedResidents + " 人*";
             }
             else
@@ -157,7 +164,7 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
     {
         EnsureStyles();
         const float width = 470f;
-        float panelHeight = string.IsNullOrEmpty(selectedInfo) ? 82f : 245f;
+        float panelHeight = string.IsNullOrEmpty(selectedInfo) ? 82f : 267f;
         float left = Screen.width - width - 16f;
         GUI.Box(new Rect(left, 16f, width, panelHeight), GUIContent.none, panelStyle);
         GUI.Label(new Rect(left + 14f, 22f, width - 28f, 24f), "建物情報（中央の照準で自動表示）", textStyle);

@@ -7,7 +7,8 @@ using UnityEngine;
 internal sealed class FuchuTerritoryShape
 {
     private const double UnitsPerMeter = 1000.0;
-    private const double MinimumArea = 2.0 * UnitsPerMeter * UnitsPerMeter;
+    private const double UnitsPerSquareMeter = UnitsPerMeter * UnitsPerMeter;
+    private const double MinimumArea = 2.0 * UnitsPerSquareMeter;
     private Paths64 paths = new Paths64();
     private readonly List<List<Vector2>> contours = new List<List<Vector2>>();
     private readonly List<Rect> bounds = new List<Rect>();
@@ -15,6 +16,7 @@ internal sealed class FuchuTerritoryShape
     private bool walkedOutside;
 
     public int Version { get; private set; }
+    public double ClaimedSquareMeters { get; private set; }
     public IReadOnlyList<List<Vector2>> Contours => contours;
 
     public bool Overlaps(Rect rectangle)
@@ -167,10 +169,12 @@ internal sealed class FuchuTerritoryShape
         triangles = null;
         if (candidate.Count == 0) return false;
         Paths64 union = Clipper.Union(paths, candidate, FillRule.NonZero);
-        if (Clipper.Area(union) - Clipper.Area(paths) < MinimumArea) return false;
+        double area = Clipper.Area(union);
+        if (area - ClaimedSquareMeters * UnitsPerSquareMeter < MinimumArea) return false;
         if (Clipper.Triangulate(union, out triangles, false) != TriangulateResult.success)
             return false;
         paths = union;
+        ClaimedSquareMeters = area / UnitsPerSquareMeter;
         contours.Clear();
         bounds.Clear();
         foreach (Path64 path in paths)
