@@ -152,7 +152,8 @@ internal sealed class FuchuGpuGroundFill : IDisposable
         material.SetMatrix(WorldToGroundId, WorldToGround());
         foreach (var (filter, renderer) in surfaces)
         {
-            if (filter == null || renderer == null || !renderer.isActiveAndEnabled || filter.sharedMesh == null) continue;
+            if (filter == null || renderer == null || !renderer.enabled ||
+                !renderer.gameObject.activeInHierarchy || filter.sharedMesh == null) continue;
             var parameters = new RenderParams(material)
             {
                 layer = renderer.gameObject.layer,
