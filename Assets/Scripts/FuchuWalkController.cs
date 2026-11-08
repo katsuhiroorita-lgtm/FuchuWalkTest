@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 
 /// <summary>
 /// Third-person movement and camera for the local Fuchu City prototype.
@@ -9,6 +10,7 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(CharacterController))]
 public sealed class FuchuWalkController : MonoBehaviour
 {
+    private const double RunDurationSeconds = 5.0 * 60.0;
     private const double BaseStamina = 100.0;
     private const float SprintStaminaPerSecond = 20f;
     private const double PointsPerSprintBonus = 1000.0;
@@ -57,11 +59,19 @@ public sealed class FuchuWalkController : MonoBehaviour
     private float playerFootHeight;
     private float stepPhase;
     private float sprintBonus;
+    private double runDeadline;
+    private float timeScaleBeforeResult;
 
     public double Stamina { get; private set; } = BaseStamina;
     public double MaxStamina => BaseStamina + BuildingPoints;
     public double BuildingPoints { get; private set; }
     public double TerritoryCoverage => territory != null ? territory.Coverage : 0.0;
+    internal bool RunFinished { get; private set; }
+    internal bool RetryPending { get; private set; }
+    internal int RunRank { get; private set; }
+    internal IReadOnlyList<FuchuRunRanking.Entry> Ranking { get; private set; }
+    internal double RemainingRunSeconds => RunFinished ? 0.0 :
+        System.Math.Max(0.0, runDeadline - Time.realtimeSinceStartupAsDouble);
 
     private void Awake()
     {
@@ -89,6 +99,7 @@ public sealed class FuchuWalkController : MonoBehaviour
         territory.Initialize(transform.position);
         LockCursor();
         UpdateCamera();
+        runDeadline = Time.realtimeSinceStartupAsDouble + RunDurationSeconds;
     }
 
     private void ChooseStartingPosition()
@@ -135,6 +146,13 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     private void Update()
     {
+        if (RunFinished) return;
+        if (RemainingRunSeconds <= 0.0)
+        {
+            FinishRun();
+            return;
+        }
+
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null)
             return;
@@ -203,12 +221,7 @@ public sealed class FuchuWalkController : MonoBehaviour
         if (sprinting && groundSpeed > 0.05f)
             Stamina = System.Math.Max(0.0, Stamina - SprintStaminaPerSecond * Time.deltaTime);
         if (groundSpeed > 0.05f) territory.RecordGroundStep(transform.position);
-        double earnedPoints = territory.BuildingPoints - BuildingPoints;
-        if (earnedPoints > 0.0)
-        {
-            Stamina += earnedPoints;
-            BuildingPoints = territory.BuildingPoints;
-        }
+        CreditBuildingPoints();
         if (characterController.isGrounded && groundSpeed > 0.05f)
         {
             stepPhase = Mathf.Repeat(stepPhase + groundSpeed * Time.deltaTime * 3f, Mathf.PI * 2f);
@@ -219,6 +232,40 @@ public sealed class FuchuWalkController : MonoBehaviour
             stepPhase = 0f;
             playerMesh.transform.localPosition = Vector3.up * playerFootHeight;
         }
+    }
+
+    private void CreditBuildingPoints()
+    {
+        double points = territory.BuildingPoints;
+        if (points <= BuildingPoints) return;
+        Stamina += points - BuildingPoints;
+        BuildingPoints = points;
+    }
+
+    private void FinishRun()
+    {
+        RunFinished = true;
+        territory.FinishRun();
+        CreditBuildingPoints();
+        timeScaleBeforeResult = Time.timeScale;
+        Time.timeScale = 0f;
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+        Ranking = FuchuRunRanking.Record(TerritoryCoverage, BuildingPoints, out int rank);
+        RunRank = rank;
+    }
+
+    internal void RetryRun()
+    {
+        if (!RunFinished || RetryPending) return;
+        int sceneIndex = gameObject.scene.buildIndex;
+        if (sceneIndex < 0)
+        {
+            Debug.LogWarning("Retryには現在のシーンをビルド設定に追加する必要があります。", this);
+            return;
+        }
+        RetryPending = true;
+        SceneManager.LoadScene(sceneIndex);
     }
 
     private void LateUpdate()
@@ -253,6 +300,7 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     private void OnDestroy()
     {
+        if (RunFinished) Time.timeScale = timeScaleBeforeResult;
         if (territory != null) Destroy(territory.gameObject);
         if (playerRenderer != null)
         {
@@ -268,6 +316,7 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     public void ReturnToStartingPosition()
     {
+        if (RunFinished) return;
         if (territory != null) territory.ClearOpenTrail();
         sprintBonus = 0f;
         characterController.enabled = false;

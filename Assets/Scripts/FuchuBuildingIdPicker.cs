@@ -39,6 +39,7 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
 
     private void Update()
     {
+        if (player != null && player.RunFinished) return;
         if (Time.unscaledTime < nextTargetScanTime) return;
         nextTargetScanTime = Time.unscaledTime + Mathf.Max(0.05f, targetScanInterval);
         ScanTargetBuilding();
@@ -177,6 +178,7 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
 
     private void OnGUI()
     {
+        if (player != null && player.RunFinished) return;
         EnsureStyles();
         const float width = 470f;
         float panelHeight = string.IsNullOrEmpty(selectedInfo) ? 82f : 289f;

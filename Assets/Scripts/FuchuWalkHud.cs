@@ -28,6 +28,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
     private GUIStyle panelStyle;
     private GUIStyle headingStyle;
     private GUIStyle textStyle;
+    private GUIStyle resultTitleStyle;
 
     public bool TimeMenuVisible => timeMenuVisible;
     public float NightFactor
@@ -55,6 +56,8 @@ public sealed class FuchuWalkHud : MonoBehaviour
 
     private void Update()
     {
+        if (player != null && player.RunFinished) return;
+
         Keyboard keyboard = Keyboard.current;
         if (keyboard != null)
         {
@@ -90,6 +93,11 @@ public sealed class FuchuWalkHud : MonoBehaviour
     private void OnGUI()
     {
         EnsureStyles();
+        if (player != null && player.RunFinished)
+        {
+            DrawResults();
+            return;
+        }
         if (raining) DrawRain();
         if (player != null) DrawPlayerStatus();
         if (!visible) return;
@@ -124,12 +132,15 @@ public sealed class FuchuWalkHud : MonoBehaviour
 
     private void DrawPlayerStatus()
     {
-        Rect panel = new Rect(16f, Screen.height - 124f, 288f, 108f);
+        Rect panel = new Rect(16f, Screen.height - 153f, 288f, 137f);
         GUI.Box(panel, GUIContent.none, panelStyle);
-        GUI.Label(new Rect(panel.x + 12f, panel.y + 7f, 264f, 22f),
+        int seconds = (int)System.Math.Ceiling(player.RemainingRunSeconds);
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 7f, 264f, 26f),
+            $"残り時間  {seconds / 60:00}:{seconds % 60:00}", headingStyle);
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 36f, 264f, 22f),
             $"スタミナ  {System.Math.Ceiling(player.Stamina):N0} / {player.MaxStamina:N0}", textStyle);
 
-        Rect bar = new Rect(panel.x + 12f, panel.y + 34f, 264f, 12f);
+        Rect bar = new Rect(panel.x + 12f, panel.y + 63f, 264f, 12f);
         Color previous = GUI.color;
         GUI.color = new Color(0.12f, 0.16f, 0.19f);
         GUI.DrawTexture(bar, whiteTexture);
@@ -138,10 +149,57 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.DrawTexture(bar, whiteTexture);
         GUI.color = previous;
 
-        GUI.Label(new Rect(panel.x + 12f, panel.y + 52f, 196f, 22f),
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 81f, 196f, 22f),
             $"確定エリア  {player.TerritoryCoverage * 100.0:0.0000}%", textStyle);
-        GUI.Label(new Rect(panel.x + 12f, panel.y + 76f, 264f, 22f),
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 105f, 264f, 22f),
             $"エリア内の建物ポイント  {player.BuildingPoints:N0} pt", textStyle);
+    }
+
+    private void DrawResults()
+    {
+        int previousDepth = GUI.depth;
+        Color previousColor = GUI.color;
+        Matrix4x4 previousMatrix = GUI.matrix;
+        GUI.depth = -100;
+        GUI.color = new Color(0.035f, 0.055f, 0.09f, 0.94f);
+        GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), whiteTexture);
+        GUI.color = previousColor;
+
+        const float width = 480f;
+        const float height = 510f;
+        float scale = Mathf.Min(1f, Mathf.Min((Screen.width - 20f) / width, (Screen.height - 20f) / height));
+        if (scale <= 0f)
+        {
+            GUI.depth = previousDepth;
+            return;
+        }
+        var position = new Vector3((Screen.width - width * scale) * 0.5f, (Screen.height - height * scale) * 0.5f, 0f);
+        GUI.matrix = Matrix4x4.TRS(position, Quaternion.identity, new Vector3(scale, scale, 1f));
+        GUI.Box(new Rect(0, 0, width, height), GUIContent.none, panelStyle);
+        GUI.Label(new Rect(24, 18, 432, 38), "タイムアップ", resultTitleStyle);
+        GUI.Label(new Rect(32, 69, 416, 26), $"確定エリア面積  {player.TerritoryCoverage * 100.0:0.0000}%", headingStyle);
+        GUI.Label(new Rect(32, 100, 416, 26), $"延床面積ポイント合計  {player.BuildingPoints:N0} pt", headingStyle);
+        GUI.Label(new Rect(32, 134, 416, 24),
+            player.RunRank > 0 ? $"今回の順位  {player.RunRank}位" : "今回の順位  トップ10圏外", textStyle);
+        GUI.Label(new Rect(32, 173, 416, 26), "面積ランキング　この端末の上位10件", headingStyle);
+
+        for (int i = 0; i < player.Ranking.Count; i++)
+        {
+            FuchuRunRanking.Entry entry = player.Ranking[i];
+            float y = 208f + i * 22f;
+            string marker = player.RunRank == i + 1 ? "▶" : "";
+            GUI.Label(new Rect(32, y, 70, 22), $"{marker}{i + 1}位", textStyle);
+            GUI.Label(new Rect(110, y, 150, 22), $"{entry.coverage * 100.0:0.0000}%", textStyle);
+            GUI.Label(new Rect(270, y, 178, 22), $"{entry.buildingPoints:N0} pt", textStyle);
+        }
+
+        bool previousEnabled = GUI.enabled;
+        GUI.enabled = previousEnabled && !player.RetryPending;
+        bool retry = GUI.Button(new Rect(148, 450, 184, 40), player.RetryPending ? "読み込み中…" : "Retry");
+        GUI.enabled = previousEnabled;
+        GUI.matrix = previousMatrix;
+        GUI.depth = previousDepth;
+        if (retry) player.RetryRun();
     }
 
     private void EnsureStyles()
@@ -149,6 +207,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
         if (panelStyle != null) return;
         panelStyle = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.UpperLeft, padding = new RectOffset(12, 12, 10, 10) };
         headingStyle = new GUIStyle(GUI.skin.label) { fontSize = 17, fontStyle = FontStyle.Bold, normal = { textColor = Color.white } };
+        resultTitleStyle = new GUIStyle(headingStyle) { fontSize = 26, alignment = TextAnchor.MiddleCenter };
         textStyle = new GUIStyle(GUI.skin.label) { fontSize = 13, wordWrap = true, normal = { textColor = Color.white } };
         whiteTexture = new Texture2D(1, 1, TextureFormat.RGBA32, false);
         whiteTexture.SetPixel(0, 0, Color.white);

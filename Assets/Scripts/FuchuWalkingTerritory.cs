@@ -31,6 +31,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private FuchuGpuGroundFill gpuGround;
     private bool fillingGround;
     private bool gpuBordersPending;
+    private bool runFinished;
     private float gpuBorderHeight;
     private float groundSearchHeight;
 
@@ -66,7 +67,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
 
     private void Update()
     {
-        if (shape.Version > 0)
+        if (!runFinished && shape.Version > 0)
             buildings.RefreshLoadedBuildings();
     }
 
@@ -86,7 +87,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
 
     public void RecordGroundStep(Vector3 position)
     {
-        if (openLine == null) return;
+        if (runFinished || openLine == null) return;
         Vector3 local = ToLocal(position);
         var point = new Vector2(local.x, local.z);
         if (trail.Count > 0 && Vector2.Distance(trail[trail.Count - 1], point) < SampleSpacing)
@@ -163,6 +164,12 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         trail.Clear();
         shape.ClearOpenTrail();
         if (openLine != null) openLine.positionCount = 0;
+    }
+
+    internal void FinishRun()
+    {
+        runFinished = true;
+        ClearOpenTrail();
     }
 
     private bool TryCloseTrail(Vector2 point, out Paths64 triangles)
