@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -23,6 +24,9 @@ public sealed class FuchuWalkController : MonoBehaviour
     private const float CameraCollisionRadius = 0.16f;
 
     [SerializeField] private Transform cameraTransform;
+    [SerializeField] private MeshCollider spawnRoad;
+    [Tooltip("Start points in the road mesh's local XZ coordinates.")]
+    [SerializeField] private Vector2[] spawnPoints;
     [SerializeField] private float walkSpeed = 4.5f;
     [SerializeField] private float sprintSpeed = 7f;
     [SerializeField] private float lookSensitivity = 0.12f;
@@ -64,12 +68,50 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     private void Start()
     {
+        ChooseStartingPosition();
         var territoryObject = new GameObject("Walking Territory");
         territoryObject.transform.SetParent(transform.parent, false);
         territory = territoryObject.AddComponent<FuchuWalkingTerritory>();
         territory.Initialize(transform.position);
         LockCursor();
         UpdateCamera();
+    }
+
+    private void ChooseStartingPosition()
+    {
+        if (spawnRoad == null || !spawnRoad.enabled || !spawnRoad.gameObject.activeInHierarchy ||
+            spawnRoad.sharedMesh == null || spawnPoints == null || spawnPoints.Length == 0)
+            return;
+
+        Transform road = spawnRoad.transform;
+        Bounds roadBounds = spawnRoad.sharedMesh.bounds;
+        Vector3 up = transform.up;
+        Vector3 footOffset = transform.TransformVector(characterController.center - Vector3.up * (characterController.height * 0.5f));
+        float radius = characterController.radius;
+        float height = characterController.height;
+        float lift = characterController.skinWidth + 0.02f;
+        var validPositions = new List<Vector3>(spawnPoints.Length);
+
+        characterController.enabled = false;
+        foreach (Vector2 point in spawnPoints)
+        {
+            Vector3 rayStart = road.TransformPoint(new Vector3(point.x, roadBounds.max.y + 1f, point.y));
+            if (!spawnRoad.Raycast(new Ray(rayStart, -road.up), out RaycastHit hit, roadBounds.size.y + 2f) ||
+                Vector3.Angle(hit.normal, up) > characterController.slopeLimit)
+                continue;
+
+            Vector3 feet = hit.point + up * lift;
+            Vector3 lower = feet + up * radius;
+            Vector3 upper = feet + up * (height - radius);
+            if (!Physics.CheckCapsule(lower, upper, radius, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                validPositions.Add(feet - footOffset);
+        }
+        if (validPositions.Count > 0)
+        {
+            transform.position = validPositions[Random.Range(0, validPositions.Count)];
+            startingPosition = transform.localPosition;
+        }
+        characterController.enabled = true;
     }
 
     private void Update()

@@ -525927,6 +525927,18 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::FuchuWalkController
   cameraTransform: {fileID: 330585546}
+  spawnRoad: {fileID: 1538956461}
+  spawnPoints:
+  - {x: 462.352, y: -526.300}
+  - {x: 596.404, y: -117.915}
+  - {x: 179.578, y: -133.355}
+  - {x: -165.796, y: 107.811}
+  - {x: -300.892, y: -259.761}
+  - {x: -638.146, y: -511.839}
+  - {x: -281.208, y: -790.964}
+  - {x: -159.809, y: -1180.894}
+  - {x: 217.970, y: -874.823}
+  - {x: 582.587, y: -869.466}
   walkSpeed: 4.5
   sprintSpeed: 7
   lookSensitivity: 0.12
