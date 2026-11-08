@@ -114,8 +114,7 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
         string buildingId = ReadString(values, "gml_id", "");
         string usage = ReadString(values, "bldg:usage", "");
         double height = ReadNumber(values, "bldg:measuredHeight", -1.0);
-        int floors = ReadInteger(values, "bldg:storeysAboveGround", -1);
-        double footprintArea = ReadNumberEndingWith(values, "buildingRoofEdgeArea", -1.0);
+        double floorArea = EstimateFloorArea(values, out double footprintArea, out int floors);
 
         if (string.IsNullOrWhiteSpace(buildingId)) buildingId = "（IDなし）";
         if (string.IsNullOrWhiteSpace(usage)) usage = "（用途情報なし）";
@@ -124,14 +123,12 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
         string floorText = floors >= 0 && floors != 9999 ? floors.ToString() + " 階" : "（不明）";
 
         string nextInfo = "建物ID: " + buildingId + "\n用途: " + usageText + "\n高さ: " + heightText + "\n地上階数: " + floorText;
-        bool canEstimateFloorArea = footprintArea > 0.0 && floors > 0 && floors != 9999;
-        double floorArea = footprintArea * floors;
+        bool canEstimateFloorArea = floorArea > 0.0;
         if (canEstimateFloorArea)
         {
-            double displayedArea = System.Math.Round(floorArea, System.MidpointRounding.AwayFromZero);
             nextInfo += "\n建築面積: 約" + footprintArea.ToString("N1") + " m²";
-            nextInfo += $"\n延床面積の目安: 約{displayedArea:N0} m²";
-            nextInfo += $"\n延床面積ポイント: {displayedArea * 10.0:N0} pt";
+            nextInfo += $"\n延床面積の目安: 約{RoundFloorArea(floorArea):N0} m²";
+            nextInfo += $"\n延床面積ポイント: {FloorAreaPoints(floorArea):N0} pt";
         }
         if (IsResidentialUsage(usage))
         {
@@ -228,6 +225,19 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
     {
         return values.TryGetValue(key, out CesiumMetadataValue value) && value != null ? value.GetDouble(fallback) : fallback;
     }
+
+    internal static double EstimateFloorArea(Dictionary<string, CesiumMetadataValue> values, out double footprintArea, out int floors)
+    {
+        footprintArea = ReadNumberEndingWith(values, "buildingRoofEdgeArea", -1.0);
+        floors = ReadInteger(values, "bldg:storeysAboveGround", -1);
+        double area = footprintArea * floors;
+        return footprintArea > 0.0 && floors > 0 && floors != 9999 && !double.IsInfinity(area) ? area : 0.0;
+    }
+
+    internal static double FloorAreaPoints(double floorArea) => RoundFloorArea(floorArea) * 10.0;
+
+    private static double RoundFloorArea(double floorArea) =>
+        System.Math.Round(floorArea, System.MidpointRounding.AwayFromZero);
 
     private static int ReadInteger(Dictionary<string, CesiumMetadataValue> values, string key, int fallback)
     {

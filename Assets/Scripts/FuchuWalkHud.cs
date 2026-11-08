@@ -124,22 +124,24 @@ public sealed class FuchuWalkHud : MonoBehaviour
 
     private void DrawPlayerStatus()
     {
-        Rect panel = new Rect(16f, Screen.height - 100f, 220f, 84f);
+        Rect panel = new Rect(16f, Screen.height - 124f, 288f, 108f);
         GUI.Box(panel, GUIContent.none, panelStyle);
-        GUI.Label(new Rect(panel.x + 12f, panel.y + 7f, 196f, 22f),
-            $"スタミナ  {Mathf.CeilToInt(player.Stamina)} / {FuchuWalkController.MaxStamina:0}", textStyle);
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 7f, 264f, 22f),
+            $"スタミナ  {System.Math.Ceiling(player.Stamina):N0} / {player.MaxStamina:N0}", textStyle);
 
-        Rect bar = new Rect(panel.x + 12f, panel.y + 34f, 196f, 12f);
+        Rect bar = new Rect(panel.x + 12f, panel.y + 34f, 264f, 12f);
         Color previous = GUI.color;
         GUI.color = new Color(0.12f, 0.16f, 0.19f);
         GUI.DrawTexture(bar, whiteTexture);
-        bar.width *= player.Stamina / FuchuWalkController.MaxStamina;
+        bar.width *= (float)(player.Stamina / player.MaxStamina);
         GUI.color = new Color(0.33f, 0.84f, 0.63f);
         GUI.DrawTexture(bar, whiteTexture);
         GUI.color = previous;
 
         GUI.Label(new Rect(panel.x + 12f, panel.y + 52f, 196f, 22f),
             $"確定エリア  {player.TerritoryCoverage * 100.0:0.0000}%", textStyle);
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 76f, 264f, 22f),
+            $"エリア内の建物ポイント  {player.BuildingPoints:N0} pt", textStyle);
     }
 
     private void EnsureStyles()

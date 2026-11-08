@@ -9,7 +9,7 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(CharacterController))]
 public sealed class FuchuWalkController : MonoBehaviour
 {
-    public const float MaxStamina = 100f;
+    private const double BaseStamina = 100.0;
     private const float SprintStaminaPerSecond = 20f;
     private const float RecoveryStaminaPerSecond = 10f;
     private const float RecoveryDelay = 1f;
@@ -57,7 +57,9 @@ public sealed class FuchuWalkController : MonoBehaviour
     private float stepPhase;
     private float recoveryDelayRemaining;
 
-    public float Stamina { get; private set; } = MaxStamina;
+    public double Stamina { get; private set; } = BaseStamina;
+    public double MaxStamina => BaseStamina + BuildingPoints;
+    public double BuildingPoints { get; private set; }
     public double TerritoryCoverage => territory != null ? territory.Coverage : 0.0;
 
     private void Awake()
@@ -191,6 +193,12 @@ public sealed class FuchuWalkController : MonoBehaviour
         float groundSpeed = Vector3.ProjectOnPlane(characterController.velocity, transform.up).magnitude;
         UpdateStamina(sprintRequested, sprinting && groundSpeed > 0.05f, Time.deltaTime);
         if (groundSpeed > 0.05f) territory.RecordGroundStep(transform.position);
+        double earnedPoints = territory.BuildingPoints - BuildingPoints;
+        if (earnedPoints > 0.0)
+        {
+            Stamina += earnedPoints;
+            BuildingPoints = territory.BuildingPoints;
+        }
         if (characterController.isGrounded && groundSpeed > 0.05f)
         {
             stepPhase = Mathf.Repeat(stepPhase + groundSpeed * Time.deltaTime * 3f, Mathf.PI * 2f);
@@ -209,13 +217,13 @@ public sealed class FuchuWalkController : MonoBehaviour
         {
             recoveryDelayRemaining = RecoveryDelay;
             if (sprintMoved)
-                Stamina = Mathf.Max(0f, Stamina - SprintStaminaPerSecond * deltaTime);
+                Stamina = System.Math.Max(0.0, Stamina - SprintStaminaPerSecond * deltaTime);
             return;
         }
 
         float recoveryTime = Mathf.Max(0f, deltaTime - recoveryDelayRemaining);
         recoveryDelayRemaining = Mathf.Max(0f, recoveryDelayRemaining - deltaTime);
-        Stamina = Mathf.Min(MaxStamina, Stamina + RecoveryStaminaPerSecond * recoveryTime);
+        Stamina = System.Math.Min(MaxStamina, Stamina + RecoveryStaminaPerSecond * recoveryTime);
     }
 
     private void LateUpdate()

@@ -15,10 +15,13 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
     private readonly FuchuTerritoryShape territory;
     private readonly Dictionary<CesiumModelMetadata, LoadedModel> models = new Dictionary<CesiumModelMetadata, LoadedModel>();
     private readonly HashSet<string> capturedIds = new HashSet<string>(StringComparer.Ordinal);
+    private readonly HashSet<string> scoredIds = new HashSet<string>(StringComparer.Ordinal);
     private readonly Dictionary<MeshRenderer, Material[]> facadeMaterials = new Dictionary<MeshRenderer, Material[]>();
     private readonly Cesium3DTileset tileset;
     private float nextScan;
     private int scannedVersion;
+
+    public double TotalPoints { get; private set; }
 
     public FuchuTerritoryBuildings(Transform worldRoot, Material material, FuchuTerritoryShape territory)
     {
@@ -72,9 +75,14 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
             bool changed = false;
             foreach (Building building in model.Buildings)
             {
-                if (building.Captured || !capturedIds.Contains(building.Id)) continue;
-                building.Captured = true;
-                changed = true;
+                if (!building.Captured && capturedIds.Contains(building.Id))
+                {
+                    building.Captured = true;
+                    changed = true;
+                }
+                if (!building.Captured || building.Id.Length == 0 || scoredIds.Contains(building.Id)) continue;
+                double points = building.GetPoints();
+                if (points > 0.0 && scoredIds.Add(building.Id)) TotalPoints += points;
             }
             if (changed || model.NeedsColorUpdate)
             {
@@ -144,7 +152,7 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
                     string buildingId = idProperty?.GetValue(id)?.GetString("") ?? "";
                     if (!buildingsById.TryGetValue(buildingId, out building))
                     {
-                        building = new Building(buildingId);
+                        building = new Building(buildingId, table, id);
                         if (buildingId.Length > 0) buildingsById.Add(buildingId, building);
                         model.Buildings.Add(building);
                     }
@@ -270,8 +278,26 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
         public Vector2 Min = Vector2.positiveInfinity;
         public Vector2 Max = Vector2.negativeInfinity;
         public bool Captured;
+        private readonly CesiumPropertyTable table;
+        private readonly long featureId;
+        private double? points;
 
-        public Building(string id) => Id = id;
+        public Building(string id, CesiumPropertyTable table, long featureId)
+        {
+            Id = id;
+            this.table = table;
+            this.featureId = featureId;
+        }
+
+        public double GetPoints()
+        {
+            if (!points.HasValue)
+            {
+                double area = FuchuBuildingIdPicker.EstimateFloorArea(table.GetMetadataValuesForFeature(featureId), out _, out _);
+                points = FuchuBuildingIdPicker.FloorAreaPoints(area);
+            }
+            return points.Value;
+        }
 
         public void Expand(Vector2 point)
         {

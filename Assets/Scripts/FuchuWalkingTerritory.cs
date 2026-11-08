@@ -31,6 +31,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private float groundSearchHeight;
 
     public double Coverage => shape.ClaimedSquareMeters / PlayableGroundArea;
+    public double BuildingPoints => buildings?.TotalPoints ?? 0.0;
 
     internal void Initialize(Vector3 playerPosition)
     {
