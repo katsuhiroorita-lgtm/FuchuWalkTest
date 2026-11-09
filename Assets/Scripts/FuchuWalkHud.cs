@@ -5,10 +5,15 @@ using UnityEngine.Rendering;
 /// <summary>Control guide, accelerated day/night cycle, and simple prototype weather.</summary>
 public sealed class FuchuWalkHud : MonoBehaviour
 {
+    private const int FullHdWidth = 1920;
+    private const int FullHdHeight = 1080;
+    private const float MinutesPerGameDay = 24f * 60f;
+    private const float SecondsPerGameDayAtNormalSpeed = 120f;
     private FuchuWalkController player;
     private bool visible = true;
     private bool creditsVisible;
     private bool timeMenuVisible;
+    private bool optionsVisible;
     private bool raining;
     private Light sun;
     private Material runtimeSkybox;
@@ -29,7 +34,6 @@ public sealed class FuchuWalkHud : MonoBehaviour
     private GUIStyle headingStyle;
     private GUIStyle textStyle;
     private GUIStyle resultTitleStyle;
-    private string startMenuMessage = "";
 
     public bool TimeMenuVisible => timeMenuVisible;
     public float NightFactor
@@ -40,6 +44,14 @@ public sealed class FuchuWalkHud : MonoBehaviour
             return 1f - Mathf.Clamp01(Mathf.Sin((hour - 6f) * Mathf.PI / 12f));
         }
     }
+
+#if UNITY_STANDALONE_WIN && !UNITY_EDITOR
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void ApplyStartupDisplayMode()
+    {
+        Screen.SetResolution(FullHdWidth, FullHdHeight, FullScreenMode.Windowed);
+    }
+#endif
 
     private void Start()
     {
@@ -80,8 +92,8 @@ public sealed class FuchuWalkHud : MonoBehaviour
             }
         }
 
-        // 1440 in-game minutes over 1800 real seconds = 0.8 game minutes per second at 1x.
-        gameMinutes = (gameMinutes + Time.deltaTime * 0.8f * timeSpeed) % 1440f;
+        float minutesPerSecond = MinutesPerGameDay / SecondsPerGameDayAtNormalSpeed;
+        gameMinutes = (gameMinutes + Time.deltaTime * minutesPerSecond * timeSpeed) % MinutesPerGameDay;
         weatherTimer -= Time.deltaTime;
         if (weatherTimer <= 0f)
         {
@@ -106,7 +118,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.Box(new Rect(16, 16, 366, 178), GUIContent.none, panelStyle);
         GUI.Label(new Rect(30, 24, 330, 28), "府中まち歩き Prototype", headingStyle);
         GUI.Label(new Rect(30, 56, 340, 130),
-            "W / A / S / D：移動　マウス：視点変更\nShift：走る　Space：ジャンプ\nEsc：解除　F1：案内　F2：出典\nF3：雨切替　F4：時間設定　F5：開始地点へ戻る\n時刻 " + FormatTime() + "　天気 " + WeatherName() + "\n1日 " + DayLengthText(),
+            "W / A / S / D：移動　マウス：視点変更\nShift：走る　Space：ジャンプ\nEsc：一時中断　F1：案内　F2：出典\nF3：雨切替　F4：時間設定　F5：開始地点へ戻る\n時刻 " + FormatTime() + "　天気 " + WeatherName() + "\n1日 " + DayLengthText(),
             textStyle);
 
         if (timeMenuVisible)
@@ -179,6 +191,10 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.Box(new Rect(0, 0, width, height), GUIContent.none, panelStyle);
         if (player.RunFinished)
             DrawResults();
+        else if (player.IsPaused)
+            DrawPauseMenu();
+        else if (optionsVisible)
+            DrawOptions();
         else
             DrawStartMenu();
         GUI.matrix = previousMatrix;
@@ -189,9 +205,40 @@ public sealed class FuchuWalkHud : MonoBehaviour
     {
         GUI.Label(new Rect(24, 24, 432, 40), "府中まち歩き", resultTitleStyle);
         if (GUI.Button(new Rect(120, 89, 240, 44), "Game Start")) player.BeginRun();
-        if (GUI.Button(new Rect(120, 145, 240, 44), "Option")) startMenuMessage = "Optionは準備中です。";
-        if (GUI.Button(new Rect(120, 201, 240, 44), "Exit")) startMenuMessage = "Exitは準備中です。";
-        GUI.Label(new Rect(120, 263, 240, 32), startMenuMessage, textStyle);
+        if (GUI.Button(new Rect(120, 145, 240, 44), "Option")) optionsVisible = true;
+        if (GUI.Button(new Rect(120, 201, 240, 44), "Exit")) Application.Quit();
+    }
+
+    private void DrawPauseMenu()
+    {
+        GUI.Label(new Rect(24, 24, 432, 40), "一時中断", resultTitleStyle);
+        int seconds = (int)System.Math.Ceiling(player.RemainingRunSeconds);
+        GUI.Label(new Rect(120, 85, 240, 26), $"残り時間  {seconds / 60:00}:{seconds % 60:00}", headingStyle);
+
+        bool previousEnabled = GUI.enabled;
+        GUI.enabled = previousEnabled && !player.ReloadPending;
+        if (GUI.Button(new Rect(120, 128, 240, 44), "Continue")) player.ContinueRun();
+        if (GUI.Button(new Rect(120, 184, 240, 44), "Retry")) player.ReloadRun(startImmediately: true);
+        if (GUI.Button(new Rect(120, 240, 240, 44), "Home")) player.ReloadRun(startImmediately: false);
+        GUI.enabled = previousEnabled;
+    }
+
+    private void DrawOptions()
+    {
+        GUI.Label(new Rect(24, 18, 432, 40), "ディスプレイ表示設定", resultTitleStyle);
+        string displayMode = Screen.fullScreen ? "フルスクリーン" : "ウィンドウ";
+        GUI.Label(new Rect(120, 64, 340, 24), $"現在：{Screen.width} × {Screen.height}（{displayMode}）", textStyle);
+
+        if (GUI.Button(new Rect(100, 100, 280, 40), "フルHD  1920 × 1080（ウィンドウ）"))
+            Screen.SetResolution(FullHdWidth, FullHdHeight, FullScreenMode.Windowed);
+        if (GUI.Button(new Rect(100, 150, 280, 40), "4K  3840 × 2160（ウィンドウ）"))
+            Screen.SetResolution(3840, 2160, FullScreenMode.Windowed);
+        if (GUI.Button(new Rect(100, 200, 280, 40), "フルスクリーン"))
+        {
+            Resolution desktop = Screen.currentResolution;
+            Screen.SetResolution(desktop.width, desktop.height, FullScreenMode.FullScreenWindow);
+        }
+        if (GUI.Button(new Rect(120, 260, 240, 40), "戻る")) optionsVisible = false;
     }
 
     private void DrawResults()
@@ -218,7 +265,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
         bool retry = GUI.Button(new Rect(48, 450, 184, 40), player.ReloadPending ? "読み込み中…" : "Retry");
         bool home = GUI.Button(new Rect(248, 450, 184, 40), "Home");
         GUI.enabled = previousEnabled;
-        if (retry || home) player.ReloadAfterResult(startImmediately: retry);
+        if (retry || home) player.ReloadRun(startImmediately: retry);
     }
 
     private void EnsureStyles()
@@ -464,8 +511,8 @@ public sealed class FuchuWalkHud : MonoBehaviour
 
     private string DayLengthText()
     {
-        float minutes = 30f / timeSpeed;
-        return minutes < 1f ? (minutes * 60f).ToString("0") + "秒" : minutes.ToString("0.#") + "分";
+        float seconds = SecondsPerGameDayAtNormalSpeed / timeSpeed;
+        return seconds < 60f ? seconds.ToString("0") + "秒" : (seconds / 60f).ToString("0.#") + "分";
     }
 
     private void DrawSpeedButton(Rect rect, float value, string label)

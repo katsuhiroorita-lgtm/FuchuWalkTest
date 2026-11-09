@@ -9,6 +9,10 @@
 /Assets/_Recovery/
 /Assets/_Recovery.meta
 
+# Local PLATEAU tiles copied into Windows builds
+/Assets/StreamingAssets/FuchuBuildings/
+/Assets/StreamingAssets/FuchuBuildings.meta
+
 # IDE-generated files
 /.vs/
 /.idea/

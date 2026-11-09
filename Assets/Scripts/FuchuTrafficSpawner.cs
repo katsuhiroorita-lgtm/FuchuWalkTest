@@ -103,8 +103,8 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
 
     private void Update()
     {
-        if (nodes == null) return;
         float dt = Time.deltaTime;
+        if (nodes == null || dt <= 0f) return;
         foreach (CarState car in cars)
         {
             Vector3 position = car.Root.localPosition;

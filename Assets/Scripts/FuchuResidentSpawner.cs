@@ -66,8 +66,8 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
 
     private void Update()
     {
-        if (nodes == null) return;
         float deltaTime = Time.deltaTime;
+        if (nodes == null || deltaTime <= 0f) return;
         for (int i = 0; i < residents.Count; i++)
         {
             ResidentState resident = residents[i];

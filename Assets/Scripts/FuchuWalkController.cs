@@ -14,7 +14,7 @@ public sealed class FuchuWalkController : MonoBehaviour
     private const double BaseStamina = 100.0;
     private const float SprintStaminaPerSecond = 20f;
     private const double PointsPerSprintBonus = 1000.0;
-    private const float MaximumSprintBonus = 99f;
+    private const float MaximumSprintBonus = 50f;
     private const float SprintBonusPerSecond = 5f;
 
     private const float DefaultCameraPitch = 22f;
@@ -60,6 +60,7 @@ public sealed class FuchuWalkController : MonoBehaviour
     private float stepPhase;
     private float sprintBonus;
     private double runDeadline;
+    private double? pausedRunSeconds;
     private float? timeScaleBeforeMenu;
     private bool runStarted;
     private static bool startAfterReload;
@@ -69,12 +70,13 @@ public sealed class FuchuWalkController : MonoBehaviour
     public double BuildingPoints { get; private set; }
     public double TerritoryCoverage => territory != null ? territory.Coverage : 0.0;
     internal bool RunFinished { get; private set; }
-    internal bool IsPlaying => runStarted && !RunFinished;
+    internal bool IsPlaying => runStarted && !RunFinished && !IsPaused;
+    internal bool IsPaused => pausedRunSeconds.HasValue;
     internal bool ReloadPending { get; private set; }
     internal int RunRank { get; private set; }
     internal IReadOnlyList<FuchuRunRanking.Entry> Ranking { get; private set; }
-    internal double RemainingRunSeconds => !IsPlaying ? 0.0 :
-        System.Math.Max(0.0, runDeadline - Time.realtimeSinceStartupAsDouble);
+    internal double RemainingRunSeconds => !runStarted || RunFinished ? 0.0 :
+        pausedRunSeconds ?? System.Math.Max(0.0, runDeadline - Time.realtimeSinceStartupAsDouble);
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetReloadState() => startAfterReload = false;
@@ -176,6 +178,13 @@ public sealed class FuchuWalkController : MonoBehaviour
         if (keyboard == null)
             return;
 
+        if (keyboard.escapeKey.wasPressedThisFrame && walkHud != null && walkHud.isActiveAndEnabled)
+        {
+            pausedRunSeconds = RemainingRunSeconds;
+            PauseForMenu();
+            return;
+        }
+
         if (keyboard.f5Key.wasPressedThisFrame)
         {
             ReturnToStartingPosition();
@@ -183,13 +192,8 @@ public sealed class FuchuWalkController : MonoBehaviour
         }
 
         Mouse mouse = Mouse.current;
-        if (keyboard.escapeKey.wasPressedThisFrame)
-        {
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
-        }
-        else if (mouse != null && mouse.leftButton.wasPressedThisFrame && Cursor.lockState != CursorLockMode.Locked &&
-                 (walkHud == null || !walkHud.TimeMenuVisible))
+        if (mouse != null && mouse.leftButton.wasPressedThisFrame && Cursor.lockState != CursorLockMode.Locked &&
+            (walkHud == null || !walkHud.TimeMenuVisible))
         {
             LockCursor();
         }
@@ -286,9 +290,18 @@ public sealed class FuchuWalkController : MonoBehaviour
         timeScaleBeforeMenu = null;
     }
 
-    internal void ReloadAfterResult(bool startImmediately)
+    internal void ContinueRun()
     {
-        if (!RunFinished || ReloadPending) return;
+        if (!IsPaused || ReloadPending) return;
+        runDeadline = Time.realtimeSinceStartupAsDouble + pausedRunSeconds.Value;
+        pausedRunSeconds = null;
+        ResumeFromMenu();
+        if (walkHud == null || !walkHud.TimeMenuVisible) LockCursor();
+    }
+
+    internal void ReloadRun(bool startImmediately)
+    {
+        if ((!RunFinished && !IsPaused) || ReloadPending) return;
         int sceneIndex = gameObject.scene.buildIndex;
         if (sceneIndex < 0)
         {
@@ -302,7 +315,7 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     private void LateUpdate()
     {
-        UpdateCamera();
+        if (!IsPaused) UpdateCamera();
     }
 
     private void UpdateCamera()

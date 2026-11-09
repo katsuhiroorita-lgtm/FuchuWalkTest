@@ -67,7 +67,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
 
     private void Update()
     {
-        if (!runFinished && shape.Version > 0)
+        if (!runFinished && shape.Version > 0 && Time.timeScale > 0f)
             buildings.RefreshLoadedBuildings();
     }
 
