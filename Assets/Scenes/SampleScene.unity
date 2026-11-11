@@ -525943,7 +525943,7 @@ MonoBehaviour:
   walkSpeed: 4.5
   sprintSpeed: 7
   lookSensitivity: 0.12
-  jumpHeight: 1.1
+  jumpHeight: 1.65
   gravity: -20
 --- !u!143 &1744569985
 CharacterController:

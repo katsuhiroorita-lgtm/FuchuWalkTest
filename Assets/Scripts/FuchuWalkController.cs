@@ -11,10 +11,10 @@ using UnityEngine.SceneManagement;
 public sealed class FuchuWalkController : MonoBehaviour
 {
     private const double RunDurationSeconds = 5.0 * 60.0;
-    private const double BaseStamina = 100.0;
+    private const double BaseStamina = 500.0;
     private const float SprintStaminaPerSecond = 20f;
     private const double PointsPerSprintBonus = 1000.0;
-    private const float MaximumSprintBonus = 50f;
+    private const float MaximumSprintBonus = 30f;
     private const float SprintBonusPerSecond = 5f;
 
     private const float DefaultCameraPitch = 22f;
@@ -44,7 +44,7 @@ public sealed class FuchuWalkController : MonoBehaviour
     [SerializeField] private float walkSpeed = 4.5f;
     [SerializeField] private float sprintSpeed = 7f;
     [SerializeField] private float lookSensitivity = 0.12f;
-    [SerializeField] private float jumpHeight = 1.1f;
+    [SerializeField] private float jumpHeight = 1.65f;
     [SerializeField] private float gravity = -20f;
 
     private CharacterController characterController;
