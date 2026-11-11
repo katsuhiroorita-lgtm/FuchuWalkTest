@@ -17,6 +17,10 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
     private readonly List<Mesh> ownedMeshes = new List<Mesh>();
     private readonly List<Material> ownedMaterials = new List<Material>();
     private System.Random random;
+    private FuchuWalkController player;
+    private CharacterController playerCharacter;
+    private Vector3 previousPlayerCenter;
+    private bool wasPlaying;
 
     private static readonly VariantDescription[] Variants =
     {
@@ -34,6 +38,8 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
 
     private void Start()
     {
+        player = FindFirstObjectByType<FuchuWalkController>();
+        if (player != null) playerCharacter = player.GetComponent<CharacterController>();
         if (worldRoot == null || roadMeshFilter == null || roadMeshFilter.sharedMesh == null)
         {
             Debug.LogWarning("Fuchu residents need a road surface and georeference.", this);
@@ -67,7 +73,11 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
     private void Update()
     {
         float deltaTime = Time.deltaTime;
-        if (nodes == null || deltaTime <= 0f) return;
+        if (nodes == null || deltaTime <= 0f)
+        {
+            wasPlaying = false;
+            return;
+        }
         for (int i = 0; i < residents.Count; i++)
         {
             ResidentState resident = residents[i];
@@ -97,6 +107,44 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
                 resident.Root.localPosition = position;
             }
         }
+        DetectPlayerCollision();
+    }
+
+    private void DetectPlayerCollision()
+    {
+        if (player == null || playerCharacter == null || !player.IsPlaying)
+        {
+            wasPlaying = false;
+            return;
+        }
+        Bounds playerBounds = playerCharacter.bounds;
+        Vector3 center = playerBounds.center;
+        if (!wasPlaying || (center - previousPlayerCenter).sqrMagnitude > 100f) previousPlayerCenter = center;
+        Vector3 movement = center - previousPlayerCenter;
+        for (int i = residents.Count - 1; i >= 0; i--)
+        {
+            ResidentState resident = residents[i];
+            Bounds contact = resident.Visual.GetComponent<MeshRenderer>().bounds;
+            contact.Expand(playerBounds.size);
+            bool touched = contact.Contains(center) || contact.Contains(previousPlayerCenter);
+            if (!touched && movement.sqrMagnitude > 0f)
+                touched = contact.IntersectRay(new Ray(previousPlayerCenter, movement.normalized), out float distance) && distance <= movement.magnitude;
+            if (!touched)
+            {
+                resident.TouchingPlayer = false;
+                continue;
+            }
+            if (player.ToughnessLevel == 1)
+            {
+                if (!resident.TouchingPlayer) player.HitResident();
+                resident.TouchingPlayer = true;
+                continue;
+            }
+            FuchuKnockback.Launch(resident.Root, player.transform);
+            residents.RemoveAt(i);
+        }
+        previousPlayerCenter = center;
+        wasPlaying = true;
     }
 
     private void OnDestroy()
@@ -425,6 +473,7 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
 
     private sealed class ResidentState
     {
+        public bool TouchingPlayer;
         public readonly Transform Root;
         public readonly Transform Visual;
         public int CurrentNode, PreviousNode, TargetNode;

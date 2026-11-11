@@ -11,6 +11,8 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
     [HideInInspector] public FuchuWalkController playerController;
     [HideInInspector] public Vector3 initialPosition;
     [Min(1)] public int carCount = 72;
+    [Min(0)] public int mediumCarCount = 24;
+    [Min(0)] public int largeCarCount = 12;
     [Min(10f)] public float radiusMeters = 1000f;
     [Min(1f)] public float minimumSpeed = 5f;
     [Min(1f)] public float maximumSpeed = 9f;
@@ -63,6 +65,7 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
             if (nodes[i].Neighbors.Count > 0 && nodes[i].InsideRadius && nodes[i].Component >= 0) choices.Add(i);
         Shuffle(choices);
         var selected = new List<int>();
+        int totalCarCount = carCount + mediumCarCount + largeCarCount;
         foreach (int candidate in choices)
         {
             Vector3 point = nodes[candidate].Center;
@@ -74,14 +77,14 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
             }
             if (!spaced) continue;
             selected.Add(candidate);
-            if (selected.Count >= carCount) break;
+            if (selected.Count >= totalCarCount) break;
         }
-        if (selected.Count < carCount)
+        if (selected.Count < totalCarCount)
             foreach (int candidate in choices)
             {
                 if (selected.Contains(candidate)) continue;
                 selected.Add(candidate);
-                if (selected.Count >= carCount) break;
+                if (selected.Count >= totalCarCount) break;
             }
 
         for (int i = 0; i < selected.Count; i++)
@@ -95,9 +98,11 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
             car.transform.localPosition = nodes[current].Center;
             Transform visual = new GameObject("Visual").transform;
             visual.SetParent(car.transform, false);
-            BuildCarModel(visual, paintMaterials[i % paintMaterials.Length], glassMaterial, tireMaterial, lampMaterial);
+            VehicleType type = i < carCount ? VehicleType.Regular : i < carCount + mediumCarCount ? VehicleType.Medium : VehicleType.Large;
+            car.name = $"TrafficCar_{type}_{i + 1:00}";
+            BuildCarModel(visual, paintMaterials[i % paintMaterials.Length], glassMaterial, tireMaterial, lampMaterial, type);
             cars.Add(new CarState(car.transform, visual, current, destination, route,
-                minimumSpeed + (float)random.NextDouble() * Mathf.Max(0f, maximumSpeed - minimumSpeed)));
+                minimumSpeed + (float)random.NextDouble() * Mathf.Max(0f, maximumSpeed - minimumSpeed), type));
         }
     }
 
@@ -142,18 +147,29 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
 
     private void DetectPlayerCollision()
     {
-        if (playerController == null || Time.time < collisionCooldownUntil) return;
+        if (playerController == null || !playerController.IsPlaying || Time.time < collisionCooldownUntil) return;
         CharacterController character = playerController.GetComponent<CharacterController>();
         if (character == null) return;
         Bounds playerBounds = character.bounds;
         Vector3 playerCenter = playerBounds.center;
-        foreach (CarState car in cars)
+        for (int i = cars.Count - 1; i >= 0; i--)
         {
+            CarState car = cars[i];
             Vector3 local = car.Visual.InverseTransformPoint(playerCenter);
-            bool overlapsCarBody = Mathf.Abs(local.x) <= 1.32f && Mathf.Abs(local.z) <= 2.38f &&
+            Vector3 size = VehicleSize(car.Type);
+            bool overlapsCarBody = Mathf.Abs(local.x) <= size.x * 0.5f + character.radius &&
+                                   Mathf.Abs(local.z) <= size.z * 0.5f + character.radius &&
                                    playerBounds.max.y >= car.Root.position.y + 0.12f &&
-                                   playerBounds.min.y <= car.Root.position.y + 1.55f;
+                                   playerBounds.min.y <= car.Root.position.y + size.y;
             if (!overlapsCarBody) continue;
+            int requiredLevel = car.Type == VehicleType.Regular ? 3 : car.Type == VehicleType.Medium ? 4 : 5;
+            if (playerController.ToughnessLevel >= requiredLevel)
+            {
+                if (playerController.ToughnessLevel == requiredLevel) playerController.SlowTemporarily();
+                FuchuKnockback.Launch(car.Root, playerController.transform);
+                cars.RemoveAt(i);
+                continue;
+            }
             collisionCooldownUntil = Time.time + 1.5f;
             playerController.ReturnToStartingPosition();
             return;
@@ -299,8 +315,13 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
         return dx * dx + dz * dz;
     }
 
-    private void BuildCarModel(Transform parent, Material paint, Material glass, Material tires, Material lamps)
+    private void BuildCarModel(Transform parent, Material paint, Material glass, Material tires, Material lamps, VehicleType type)
     {
+        if (type != VehicleType.Regular)
+        {
+            BuildLargeCarModel(parent, paint, glass, tires, lamps, type);
+            return;
+        }
         AddCube(parent, "Body", new Vector3(0f, 0.57f, 0f), new Vector3(1.85f, 0.72f, 4.05f), paint);
         AddCube(parent, "Cabin", new Vector3(0f, 1.10f, -0.20f), new Vector3(1.48f, 0.64f, 1.95f), paint);
         AddCube(parent, "Windshield", new Vector3(0f, 1.13f, 0.83f), new Vector3(1.32f, 0.47f, 0.045f), glass);
@@ -310,6 +331,47 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
                 AddCube(parent, "Wheel", new Vector3(side * 0.91f, 0.30f, axle * 1.28f), new Vector3(0.24f, 0.40f, 0.70f), tires);
         AddCube(parent, "Headlight_L", new Vector3(-0.62f, 0.57f, 2.04f), new Vector3(0.35f, 0.18f, 0.05f), lamps);
         AddCube(parent, "Headlight_R", new Vector3(0.62f, 0.57f, 2.04f), new Vector3(0.35f, 0.18f, 0.05f), lamps);
+    }
+
+    private static Vector3 VehicleSize(VehicleType type)
+    {
+        switch (type)
+        {
+            case VehicleType.Medium: return new Vector3(2.1f, 2.1f, 5.2f);
+            case VehicleType.Large: return new Vector3(2.5f, 3.3f, 9f);
+            default: return new Vector3(1.85f, 1.55f, 4.05f);
+        }
+    }
+
+    private void BuildLargeCarModel(Transform parent, Material paint, Material glass, Material tires, Material lamps, VehicleType type)
+    {
+        Vector3 size = VehicleSize(type);
+        float bottom = 0.25f;
+        AddCube(parent, "Body", new Vector3(0f, 0.65f, 0f), new Vector3(size.x, 0.8f, size.z), paint);
+        float cabinFront = type == VehicleType.Medium ? size.z * 0.25f : size.z * 0.48f;
+        float cabinBack = -size.z * 0.48f;
+        float cabinHeight = size.y - 1f;
+        AddCube(parent, "Cabin", new Vector3(0f, 1f + cabinHeight * 0.5f, (cabinFront + cabinBack) * 0.5f),
+            new Vector3(size.x * 0.94f, cabinHeight, cabinFront - cabinBack), paint);
+        AddCube(parent, "Windshield", new Vector3(0f, size.y - cabinHeight * 0.5f, cabinFront + 0.025f),
+            new Vector3(size.x * 0.85f, cabinHeight * 0.65f, 0.05f), glass);
+        AddCube(parent, "RearWindow", new Vector3(0f, size.y - cabinHeight * 0.5f, cabinBack - 0.025f),
+            new Vector3(size.x * 0.85f, cabinHeight * 0.65f, 0.05f), glass);
+        int windowCount = type == VehicleType.Large ? 6 : 3;
+        for (int side = -1; side <= 1; side += 2)
+        {
+            for (int window = 0; window < windowCount; window++)
+            {
+                float z = Mathf.Lerp(cabinBack, cabinFront, (window + 0.5f) / windowCount);
+                AddCube(parent, "SideWindow", new Vector3(side * size.x * 0.475f, size.y - cabinHeight * 0.5f, z),
+                    new Vector3(0.05f, cabinHeight * 0.65f, (cabinFront - cabinBack) / windowCount * 0.8f), glass);
+            }
+            for (int axle = -1; axle <= 1; axle += 2)
+                AddCube(parent, "Wheel", new Vector3(side * size.x * 0.49f, bottom + 0.1f, axle * size.z * 0.32f),
+                    new Vector3(0.3f, 0.65f, 0.85f), tires);
+            AddCube(parent, "Headlight", new Vector3(side * size.x * 0.33f, 0.65f, size.z * 0.5f + 0.025f),
+                new Vector3(0.4f, 0.22f, 0.05f), lamps);
+        }
     }
 
     private static void AddCube(Transform parent, string name, Vector3 position, Vector3 scale, Material material)
@@ -363,16 +425,20 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
 
     private sealed class CarState
     {
+        public readonly VehicleType Type;
         public readonly Transform Root, Visual;
         public readonly float Speed;
         public int CurrentNode, TargetNode, DestinationNode, RouteIndex;
         public List<int> Route;
-        public CarState(Transform root, Transform visual, int current, int destination, List<int> route, float speed)
+        public CarState(Transform root, Transform visual, int current, int destination, List<int> route, float speed, VehicleType type)
         {
+            Type = type;
             Root = root; Visual = visual; CurrentNode = current; DestinationNode = destination;
             Route = route; RouteIndex = 1; TargetNode = route[1]; Speed = speed;
         }
     }
+
+    private enum VehicleType { Regular, Medium, Large }
 
     private readonly struct IndexEdge : IEquatable<IndexEdge>
     {
