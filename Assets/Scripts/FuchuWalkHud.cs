@@ -145,7 +145,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
 
     private void DrawPlayerStatus()
     {
-        Rect panel = new Rect(16f, Screen.height - 179f, 288f, 163f);
+        Rect panel = new Rect(16f, Screen.height - 231f, 330f, 215f);
         GUI.Box(panel, GUIContent.none, panelStyle);
         int seconds = (int)System.Math.Ceiling(player.RemainingRunSeconds);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 7f, 264f, 26f),
@@ -167,7 +167,11 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.Label(new Rect(panel.x + 12f, panel.y + 105f, 264f, 22f),
             $"エリア内の建物ポイント  {player.BuildingPoints:N0} pt", textStyle);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 131f, 264f, 22f),
-            $"頑丈さ  Lv{player.ToughnessLevel}", textStyle);
+            $"速度  Lv{player.SpeedLevel}　頑丈さ  Lv{player.ToughnessLevel}", textStyle);
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 157f, 306f, 22f),
+            $"移動速度ポイント（緑）  {player.MovementPoints:N1} pt", textStyle);
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 183f, 306f, 22f),
+            $"頑丈さポイント（赤）  {player.ToughnessPoints:N1} pt", textStyle);
     }
 
     private void DrawMenuScreen()

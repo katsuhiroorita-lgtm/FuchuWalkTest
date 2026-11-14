@@ -18,13 +18,19 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
     private readonly HashSet<string> scoredIds = new HashSet<string>(StringComparer.Ordinal);
     private readonly Dictionary<MeshRenderer, Material[]> facadeMaterials = new Dictionary<MeshRenderer, Material[]>();
     private readonly Cesium3DTileset tileset;
+    private readonly FuchuBuildingEffects effects;
     private float nextScan;
     private int scannedVersion;
 
     public double TotalPoints { get; private set; }
+    private double movementBuildingPoints;
+    private double toughnessBuildingPoints;
+    public double MovementPoints => movementBuildingPoints / 10.0;
+    public double ToughnessPoints => toughnessBuildingPoints / 10.0;
 
-    public FuchuTerritoryBuildings(Transform worldRoot, Material material, FuchuTerritoryShape territory)
+    public FuchuTerritoryBuildings(Transform worldRoot, Material material, FuchuTerritoryShape territory, FuchuBuildingEffects effects)
     {
+        this.effects = effects;
         this.worldRoot = worldRoot;
         this.material = material;
         this.territory = territory;
@@ -57,9 +63,11 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
                 model = new LoadedModel();
                 models.Add(metadata, model);
             }
+            if (model.Primitives.Count == 0) ReadBuildingGeometry(metadata, model);
+            foreach (Building building in model.Buildings)
+                effects.Register(building.Id, building.Min, building.Max, building.MinHeight);
             if (model.LastCheckedVersion == territory.Version) continue;
             model.LastCheckedVersion = territory.Version;
-            if (model.Primitives.Count == 0) ReadBuildingGeometry(metadata, model);
             foreach (Building building in model.Buildings)
             {
                 if (building.Captured || !territory.Contains((building.Min + building.Max) * 0.5f)) continue;
@@ -82,7 +90,13 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
                 }
                 if (!building.Captured || building.Id.Length == 0 || scoredIds.Contains(building.Id)) continue;
                 double points = building.GetPoints();
-                if (points > 0.0 && scoredIds.Add(building.Id)) TotalPoints += points;
+                if (points > 0.0 && scoredIds.Add(building.Id))
+                {
+                    TotalPoints += points;
+                    if (effects.IsMovement(building.Id)) movementBuildingPoints += points;
+                    else toughnessBuildingPoints += points;
+                    effects.Capture(building.Id);
+                }
             }
             if (changed || model.NeedsColorUpdate)
             {
@@ -106,7 +120,7 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
         foreach (CesiumPrimitiveFeatures source in sources)
         {
             if (!source.TryGetComponent(out MeshRenderer renderer)) continue;
-            if (!territory.Overlaps(ProjectBounds(renderer.bounds))) continue;
+            if (!effects.OverlapsPlayableArea(ProjectBounds(renderer.bounds))) continue;
             nearArea = true;
             break;
         }
@@ -133,9 +147,9 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
             var faces = new Building[indices.Length / 3];
             Matrix4x4 toLocal = filter.transform.localToWorldMatrix;
             if (worldRoot != null) toLocal = worldRoot.worldToLocalMatrix * toLocal;
-            var projected = new Vector2[vertices.Length];
+            var projected = new Vector3[vertices.Length];
             for (int i = 0; i < projected.Length; i++)
-                projected[i] = Flatten(toLocal.MultiplyPoint3x4(vertices[i]));
+                projected[i] = toLocal.MultiplyPoint3x4(vertices[i]);
             var featureIds = new Dictionary<int, long>();
 
             for (int i = 0; i < indices.Length; i += 3)
@@ -277,6 +291,7 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
         public readonly string Id;
         public Vector2 Min = Vector2.positiveInfinity;
         public Vector2 Max = Vector2.negativeInfinity;
+        public float MinHeight = float.PositiveInfinity;
         public bool Captured;
         private readonly CesiumPropertyTable table;
         private readonly long featureId;
@@ -299,8 +314,10 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
             return points.Value;
         }
 
-        public void Expand(Vector2 point)
+        public void Expand(Vector3 position)
         {
+            Vector2 point = Flatten(position);
+            MinHeight = Mathf.Min(MinHeight, position.y);
             Min = Vector2.Min(Min, point);
             Max = Vector2.Max(Max, point);
         }
@@ -327,7 +344,7 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
 
     private sealed class LoadedModel : IDisposable
     {
-        public int LastCheckedVersion;
+        public int LastCheckedVersion = -1;
         public bool NeedsColorUpdate;
         public readonly List<Building> Buildings = new List<Building>();
         public readonly List<Primitive> Primitives = new List<Primitive>();

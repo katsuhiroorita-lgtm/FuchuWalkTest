@@ -149,6 +149,11 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
             nextInfo += "\n延床面積の目安: （不明）";
         }
         nextInfo += $"\n延床面積ポイント: {FloorAreaPoints(floorArea):N0} pt";
+        if (player != null && player.BuildingEffects != null && buildingId != "（IDなし）")
+        {
+            string effectName = player.BuildingEffects.IsMovement(buildingId) ? "移動速度ポイント（緑）" : "頑丈さポイント（赤）";
+            nextInfo += $"\n建物効果: {effectName}\n効果ポイント: {FloorAreaPoints(floorArea) / 10.0:N1} pt";
+        }
         if (IsResidentialUsage(usage))
         {
             if (canEstimateFloorArea)
@@ -181,7 +186,7 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
         if (player != null && !player.IsPlaying) return;
         EnsureStyles();
         const float width = 470f;
-        float panelHeight = string.IsNullOrEmpty(selectedInfo) ? 82f : 289f;
+        float panelHeight = string.IsNullOrEmpty(selectedInfo) ? 82f : 337f;
         float left = Screen.width - width - 16f;
         GUI.Box(new Rect(left, 16f, width, panelHeight), GUIContent.none, panelStyle);
         GUI.Label(new Rect(left + 14f, 22f, width - 28f, 24f), "建物情報（中央の照準で自動表示）", textStyle);

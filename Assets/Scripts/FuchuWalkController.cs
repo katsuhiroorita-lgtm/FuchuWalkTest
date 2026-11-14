@@ -69,15 +69,19 @@ public sealed class FuchuWalkController : MonoBehaviour
     public double Stamina { get; private set; } = BaseStamina;
     public double MaxStamina => BaseStamina + BuildingPoints;
     public double BuildingPoints { get; private set; }
+    public double MovementPoints => territory != null ? territory.MovementPoints : 0.0;
+    public int SpeedLevel => 1 + (int)System.Math.Min(MaximumSprintBonus, System.Math.Floor(MovementPoints / PointsPerSprintBonus));
+    public double ToughnessPoints => territory != null ? territory.ToughnessPoints : 0.0;
+    internal FuchuBuildingEffects BuildingEffects { get; private set; }
     public int ToughnessLevel
     {
         get
         {
-            if (BuildingPoints >= 1000000.0) return 6;
-            if (BuildingPoints >= 500000.0) return 5;
-            if (BuildingPoints >= 100000.0) return 4;
-            if (BuildingPoints >= 50000.0) return 3;
-            if (BuildingPoints >= 10000.0) return 2;
+            if (ToughnessPoints >= 1000000.0) return 6;
+            if (ToughnessPoints >= 500000.0) return 5;
+            if (ToughnessPoints >= 100000.0) return 4;
+            if (ToughnessPoints >= 50000.0) return 3;
+            if (ToughnessPoints >= 10000.0) return 2;
             return 1;
         }
     }
@@ -97,6 +101,7 @@ public sealed class FuchuWalkController : MonoBehaviour
     private void Awake()
     {
         characterController = GetComponent<CharacterController>();
+        BuildingEffects = gameObject.AddComponent<FuchuBuildingEffects>();
         walkHud = GetComponent<FuchuWalkHud>();
         startingPosition = transform.localPosition;
         startingRotation = transform.localRotation;
@@ -117,7 +122,7 @@ public sealed class FuchuWalkController : MonoBehaviour
         var territoryObject = new GameObject("Walking Territory");
         territoryObject.transform.SetParent(transform.parent, false);
         territory = territoryObject.AddComponent<FuchuWalkingTerritory>();
-        territory.Initialize(transform.position);
+        territory.Initialize(transform.position, BuildingEffects);
         var recoveryItems = new GameObject("Stamina Recovery Items");
         recoveryItems.transform.SetParent(transform.parent, false);
         recoveryItems.AddComponent<FuchuStaminaItems>().Initialize(this, characterController);
@@ -232,7 +237,7 @@ public sealed class FuchuWalkController : MonoBehaviour
             (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed);
         if (sprinting)
         {
-            float targetBonus = (float)System.Math.Min(MaximumSprintBonus, System.Math.Floor(BuildingPoints / PointsPerSprintBonus));
+            float targetBonus = SpeedLevel - 1;
             sprintBonus = Mathf.MoveTowards(sprintBonus, targetBonus, SprintBonusPerSecond * Time.deltaTime);
         }
         else

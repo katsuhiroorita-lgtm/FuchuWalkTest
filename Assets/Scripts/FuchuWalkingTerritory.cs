@@ -37,8 +37,10 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
 
     public double Coverage => shape.ClaimedSquareMeters / PlayableGroundArea;
     public double BuildingPoints => buildings?.TotalPoints ?? 0.0;
+    public double MovementPoints => buildings?.MovementPoints ?? 0.0;
+    public double ToughnessPoints => buildings?.ToughnessPoints ?? 0.0;
 
-    internal void Initialize(Vector3 playerPosition)
+    internal void Initialize(Vector3 playerPosition, FuchuBuildingEffects effects)
     {
         worldRoot = transform.parent;
         groundSearchHeight = ToLocal(playerPosition).y + 200f;
@@ -60,14 +62,14 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         fillMaterial = CreateMaterial(shader, new Color(0.04f, 0.27f, 0.9f, 0.68f), 3000, false);
         buildingMaterial = CreateMaterial(shader, new Color(0.07f, 0.38f, 0.96f), 2010, true);
         openLine = CreateLine("Open trail");
-        buildings = new FuchuTerritoryBuildings(worldRoot, buildingMaterial, shape);
+        buildings = new FuchuTerritoryBuildings(worldRoot, buildingMaterial, shape, effects);
         gpuGround = FuchuGpuGroundFill.TryCreate(worldRoot, ground, fillMaterial.color);
         Debug.Log(gpuGround != null ? "エリアの地面描画: GPU" : "エリアの地面描画: 差分メッシュ", this);
     }
 
     private void Update()
     {
-        if (!runFinished && shape.Version > 0 && Time.timeScale > 0f)
+        if (!runFinished && Time.timeScale > 0f)
             buildings.RefreshLoadedBuildings();
     }
 
