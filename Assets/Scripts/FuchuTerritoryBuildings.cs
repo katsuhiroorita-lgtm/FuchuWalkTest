@@ -10,12 +10,12 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
 {
     internal const string OverlayName = "FuchuTerritoryBuildingColor";
 
+    private readonly FuchuBattleMatch match;
     private readonly Transform worldRoot;
-    private readonly Material material;
-    private readonly FuchuTerritoryShape territory;
     private readonly Dictionary<CesiumModelMetadata, LoadedModel> models = new Dictionary<CesiumModelMetadata, LoadedModel>();
-    private readonly HashSet<string> capturedIds = new HashSet<string>(StringComparer.Ordinal);
-    private readonly HashSet<string> scoredIds = new HashSet<string>(StringComparer.Ordinal);
+    // Retain values after tile unloading so ownership changes never depend on visibility or LOD.
+    private readonly Dictionary<string, (Vector2 Min, Vector2 Max, double Points)> knownBuildings =
+        new Dictionary<string, (Vector2, Vector2, double)>(StringComparer.Ordinal);
     private readonly Dictionary<MeshRenderer, Material[]> facadeMaterials = new Dictionary<MeshRenderer, Material[]>();
     private readonly Cesium3DTileset tileset;
     private readonly FuchuBuildingEffects effects;
@@ -23,27 +23,31 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
     private int scannedVersion;
 
     public double TotalPoints { get; private set; }
+    public double StaminaCapacityPoints { get; private set; }
     private double movementBuildingPoints;
     private double toughnessBuildingPoints;
     public double MovementPoints => movementBuildingPoints / 10.0;
     public double ToughnessPoints => toughnessBuildingPoints / 10.0;
 
-    public FuchuTerritoryBuildings(Transform worldRoot, Material material, FuchuTerritoryShape territory, FuchuBuildingEffects effects)
+    public FuchuTerritoryBuildings(Transform worldRoot, FuchuBuildingEffects effects, FuchuBattleMatch match)
     {
+        this.match = match;
         this.effects = effects;
         this.worldRoot = worldRoot;
-        this.material = material;
-        this.territory = territory;
         tileset = worldRoot != null ? worldRoot.GetComponentInChildren<Cesium3DTileset>() : Object.FindFirstObjectByType<Cesium3DTileset>();
     }
 
     public void RefreshLoadedBuildings()
     {
-        if (tileset == null) return;
-        bool newArea = scannedVersion != territory.Version;
+        if (tileset == null)
+        {
+            RecalculateOwnedPoints();
+            return;
+        }
+        bool newArea = scannedVersion != match.Version;
         if (!newArea && Time.unscaledTime < nextScan) return;
         nextScan = Time.unscaledTime + 0.75f;
-        scannedVersion = territory.Version;
+        scannedVersion = match.Version;
 
         var unloaded = new List<CesiumModelMetadata>();
         foreach (var entry in models)
@@ -54,7 +58,6 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
         }
         foreach (CesiumModelMetadata model in unloaded) models.Remove(model);
 
-        int previousIdCount = capturedIds.Count;
         var activeModels = tileset.GetComponentsInChildren<CesiumModelMetadata>();
         foreach (CesiumModelMetadata metadata in activeModels)
         {
@@ -65,40 +68,26 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
             }
             if (model.Primitives.Count == 0) ReadBuildingGeometry(metadata, model);
             foreach (Building building in model.Buildings)
+            {
                 effects.Register(building.Id, building.Min, building.Max, building.MinHeight);
-            if (model.LastCheckedVersion == territory.Version) continue;
-            model.LastCheckedVersion = territory.Version;
+                if (building.Id.Length > 0 && !knownBuildings.ContainsKey(building.Id))
+                    knownBuildings.Add(building.Id, (building.Min, building.Max, building.GetPoints()));
+            }
+            if (model.LastCheckedVersion == match.Version) continue;
+            model.LastCheckedVersion = match.Version;
             foreach (Building building in model.Buildings)
             {
-                if (building.Captured || !territory.Contains((building.Min + building.Max) * 0.5f)) continue;
-                building.Captured = true;
-                model.NeedsColorUpdate = true;
-                if (!string.IsNullOrEmpty(building.Id)) capturedIds.Add(building.Id);
+                int owner = match.BuildingOwner(building.Id, building.Min, building.Max);
+                if (building.Owner != owner) model.NeedsColorUpdate = true;
+                building.Owner = owner;
+                if (owner >= 0) effects.Capture(building.Id);
             }
         }
 
         foreach (CesiumModelMetadata metadata in activeModels)
         {
             LoadedModel model = models[metadata];
-            bool changed = false;
-            foreach (Building building in model.Buildings)
-            {
-                if (!building.Captured && capturedIds.Contains(building.Id))
-                {
-                    building.Captured = true;
-                    changed = true;
-                }
-                if (!building.Captured || building.Id.Length == 0 || scoredIds.Contains(building.Id)) continue;
-                double points = building.GetPoints();
-                if (points > 0.0 && scoredIds.Add(building.Id))
-                {
-                    TotalPoints += points;
-                    if (effects.IsMovement(building.Id)) movementBuildingPoints += points;
-                    else toughnessBuildingPoints += points;
-                    effects.Capture(building.Id);
-                }
-            }
-            if (changed || model.NeedsColorUpdate)
+            if (model.NeedsColorUpdate)
             {
                 model.NeedsColorUpdate = false;
                 foreach (Primitive primitive in model.Primitives) ApplyColor(primitive);
@@ -109,7 +98,34 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
                     primitive.OverlayRenderer.enabled = primitive.Source.enabled;
             }
         }
-        if (previousIdCount != capturedIds.Count) ColorFacadePreviews();
+        RecalculateOwnedPoints();
+        if (newArea) ColorFacadePreviews();
+    }
+
+    private void RecalculateOwnedPoints()
+    {
+        TotalPoints = 0.0;
+        StaminaCapacityPoints = 0.0;
+        movementBuildingPoints = 0.0;
+        toughnessBuildingPoints = 0.0;
+        foreach (var entry in knownBuildings)
+        {
+            var building = entry.Value;
+            if (match.BuildingOwner(entry.Key, building.Min, building.Max) != 0) continue;
+            TotalPoints += building.Points;
+            switch (effects.GetEffect(entry.Key))
+            {
+                case FuchuBuildingEffects.EffectKind.Movement:
+                    movementBuildingPoints += building.Points;
+                    break;
+                case FuchuBuildingEffects.EffectKind.Toughness:
+                    toughnessBuildingPoints += building.Points;
+                    break;
+                case FuchuBuildingEffects.EffectKind.StaminaCapacity:
+                    StaminaCapacityPoints += building.Points;
+                    break;
+            }
+        }
     }
 
     private void ReadBuildingGeometry(CesiumModelMetadata metadata, LoadedModel model)
@@ -184,21 +200,16 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
     private void ApplyColor(Primitive primitive)
     {
         if (primitive.Source == null) return;
-        int capturedFaceCount = 0;
-        foreach (Building building in primitive.Faces)
-        {
-            if (building != null && building.Captured) capturedFaceCount++;
-        }
-        if (capturedFaceCount == primitive.CapturedFaceCount) return;
-        primitive.CapturedFaceCount = capturedFaceCount;
-        var coloredIndices = new List<int>(capturedFaceCount * 3);
+        var coloredIndices = new List<int>[FuchuBattleMatch.PlayerCount];
+        for (int i = 0; i < coloredIndices.Length; i++) coloredIndices[i] = new List<int>();
         for (int face = 0; face < primitive.Faces.Length; face++)
         {
-            if (primitive.Faces[face] == null || !primitive.Faces[face].Captured) continue;
+            Building building = primitive.Faces[face];
+            if (building == null || building.Owner < 0) continue;
             int index = face * 3;
-            coloredIndices.Add(primitive.Indices[index]);
-            coloredIndices.Add(primitive.Indices[index + 1]);
-            coloredIndices.Add(primitive.Indices[index + 2]);
+            coloredIndices[building.Owner].Add(primitive.Indices[index]);
+            coloredIndices[building.Owner].Add(primitive.Indices[index + 1]);
+            coloredIndices[building.Owner].Add(primitive.Indices[index + 2]);
         }
 
         if (primitive.OverlayMesh == null)
@@ -211,51 +222,41 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
             primitive.OverlayMesh = mesh;
             obj.AddComponent<MeshFilter>().sharedMesh = mesh;
             primitive.OverlayRenderer = obj.AddComponent<MeshRenderer>();
-            primitive.OverlayRenderer.sharedMaterial = material;
+            primitive.OverlayRenderer.sharedMaterials = match.BuildingMaterials;
             primitive.OverlayRenderer.shadowCastingMode = ShadowCastingMode.Off;
             primitive.OverlayRenderer.enabled = primitive.Source.enabled;
         }
-        primitive.OverlayMesh.SetTriangles(coloredIndices, 0);
+        primitive.OverlayMesh.subMeshCount = coloredIndices.Length;
+        for (int i = 0; i < coloredIndices.Length; i++) primitive.OverlayMesh.SetTriangles(coloredIndices[i], i);
     }
 
     private void ColorFacadePreviews()
     {
+        foreach (var entry in facadeMaterials)
+            if (entry.Key != null) entry.Key.sharedMaterials = entry.Value;
         if (worldRoot == null) return;
         Transform group = worldRoot.Find("FuchuFacadePreview_Radius1000m");
         if (group != null)
-        {
             foreach (Transform facade in group)
-            {
-                const string prefix = "Facade_";
-                if (facade.name.StartsWith(prefix, StringComparison.Ordinal) &&
-                    capturedIds.Contains(facade.name.Substring(prefix.Length)))
+                if (facade.name.StartsWith("Facade_", StringComparison.Ordinal))
                     ColorFacade(facade);
-            }
-        }
         foreach (Transform preview in worldRoot)
-        {
-            const string prefix = "FuchuFacadePreview_TargetBuilding_";
-            if (!preview.name.StartsWith(prefix, StringComparison.Ordinal)) continue;
-            string idPrefix = "bldg_" + preview.name.Substring(prefix.Length);
-            foreach (string id in capturedIds)
-            {
-                if (!id.StartsWith(idPrefix, StringComparison.Ordinal)) continue;
+            if (preview.name.StartsWith("FuchuFacadePreview_TargetBuilding_", StringComparison.Ordinal))
                 ColorFacade(preview);
-                break;
-            }
-        }
     }
 
     private void ColorFacade(Transform facade)
     {
         foreach (MeshRenderer renderer in facade.GetComponentsInChildren<MeshRenderer>(true))
         {
-            if (facadeMaterials.ContainsKey(renderer) || renderer.name == "FuchuNightWindowQuads") continue;
-            Material[] originals = renderer.sharedMaterials;
-            facadeMaterials.Add(renderer, originals);
-            var blue = new Material[originals.Length];
-            for (int i = 0; i < blue.Length; i++) blue[i] = material;
-            renderer.sharedMaterials = blue;
+            if (renderer.name == "FuchuNightWindowQuads") continue;
+            Rect bounds = ProjectBounds(renderer.bounds);
+            int owner = match.OwnerAt(bounds.center);
+            if (owner < 0) continue;
+            if (!facadeMaterials.ContainsKey(renderer)) facadeMaterials.Add(renderer, renderer.sharedMaterials);
+            var colors = new Material[facadeMaterials[renderer].Length];
+            for (int i = 0; i < colors.Length; i++) colors[i] = match.BuildingMaterials[owner];
+            renderer.sharedMaterials = colors;
         }
     }
 
@@ -292,7 +293,7 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
         public Vector2 Min = Vector2.positiveInfinity;
         public Vector2 Max = Vector2.negativeInfinity;
         public float MinHeight = float.PositiveInfinity;
-        public bool Captured;
+        public int Owner = -1;
         private readonly CesiumPropertyTable table;
         private readonly long featureId;
         private double? points;
@@ -329,7 +330,6 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
         public readonly Mesh Mesh;
         public readonly int[] Indices;
         public readonly Building[] Faces;
-        public int CapturedFaceCount;
         public Mesh OverlayMesh;
         public MeshRenderer OverlayRenderer;
 

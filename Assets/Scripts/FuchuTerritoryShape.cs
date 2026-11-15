@@ -16,6 +16,23 @@ internal sealed class FuchuTerritoryShape
     private Contact? departure;
     private bool walkedOutside;
 
+    internal Paths64 LastClaim { get; private set; }
+
+    internal bool Remove(Paths64 claimed)
+    {
+        Paths64 remaining = Clipper.Difference(paths, claimed, FillRule.NonZero);
+        if (System.Math.Abs(Clipper.Area(remaining) - Clipper.Area(paths)) < 1.0) return false;
+        SetPaths(remaining);
+        return true;
+    }
+
+    internal Paths64 Triangles()
+    {
+        if (paths.Count == 0) return new Paths64();
+        return Clipper.Triangulate(paths, out Paths64 triangles, false) == TriangulateResult.success
+            ? triangles : new Paths64();
+    }
+
     public int Version { get; private set; }
     public double ClaimedSquareMeters { get; private set; }
     public IReadOnlyList<List<Vector2>> Contours => contours;
@@ -230,8 +247,15 @@ internal sealed class FuchuTerritoryShape
         Paths64 added = paths.Count == 0 ? union : Clipper.Difference(union, paths, FillRule.NonZero);
         if (Clipper.Triangulate(added, out triangles, false) != TriangulateResult.success)
             return false;
-        paths = union;
-        ClaimedSquareMeters = area / UnitsPerSquareMeter;
+        LastClaim = candidate;
+        SetPaths(union);
+        return true;
+    }
+
+    private void SetPaths(Paths64 updated)
+    {
+        paths = updated;
+        ClaimedSquareMeters = Clipper.Area(paths) / UnitsPerSquareMeter;
         contours.Clear();
         bounds.Clear();
         foreach (Path64 path in paths)
@@ -250,7 +274,6 @@ internal sealed class FuchuTerritoryShape
         }
         Version++;
         ClearOpenTrail();
-        return true;
     }
 
     private static Path64 ToPath(List<Vector2> points)

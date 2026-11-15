@@ -26,7 +26,6 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private LineRenderer openLine;
     private Material lineMaterial;
     private Material fillMaterial;
-    private Material buildingMaterial;
     private FuchuTerritoryBuildings buildings;
     private FuchuGpuGroundFill gpuGround;
     private bool fillingGround;
@@ -34,14 +33,21 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private bool runFinished;
     private float gpuBorderHeight;
     private float groundSearchHeight;
+    private float lastTrailHeight;
+
+    private FuchuBattleMatch match;
+    internal FuchuTerritoryShape Shape => shape;
+    private readonly List<GameObject> fillObjects = new List<GameObject>();
 
     public double Coverage => shape.ClaimedSquareMeters / PlayableGroundArea;
     public double BuildingPoints => buildings?.TotalPoints ?? 0.0;
+    public double StaminaCapacityPoints => buildings?.StaminaCapacityPoints ?? 0.0;
     public double MovementPoints => buildings?.MovementPoints ?? 0.0;
     public double ToughnessPoints => buildings?.ToughnessPoints ?? 0.0;
 
-    internal void Initialize(Vector3 playerPosition, FuchuBuildingEffects effects)
+    internal void Initialize(Vector3 playerPosition, FuchuBuildingEffects effects, Color color, FuchuBattleMatch battle, bool localPlayer)
     {
+        match = battle;
         worldRoot = transform.parent;
         groundSearchHeight = ToLocal(playerPosition).y + 200f;
         foreach (string surface in new[] { "FuchuLocalDEMTerrain_1000m", "FuchuLocalRoads_1000m", "TemporaryWalkGround" })
@@ -58,11 +64,10 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
             return;
         }
 
-        lineMaterial = CreateMaterial(shader, new Color(0.06f, 0.48f, 1f), 3010, false);
-        fillMaterial = CreateMaterial(shader, new Color(0.04f, 0.27f, 0.9f, 0.68f), 3000, false);
-        buildingMaterial = CreateMaterial(shader, new Color(0.07f, 0.38f, 0.96f), 2010, true);
+        lineMaterial = CreateMaterial(shader, color, 3010, false);
+        fillMaterial = CreateMaterial(shader, new Color(color.r, color.g, color.b, 0.68f), 3000, false);
         openLine = CreateLine("Open trail");
-        buildings = new FuchuTerritoryBuildings(worldRoot, buildingMaterial, shape, effects);
+        if (localPlayer) buildings = new FuchuTerritoryBuildings(worldRoot, effects, battle);
         gpuGround = FuchuGpuGroundFill.TryCreate(worldRoot, ground, fillMaterial.color);
         Debug.Log(gpuGround != null ? "エリアの地面描画: GPU" : "エリアの地面描画: 差分メッシュ", this);
     }
@@ -70,7 +75,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private void Update()
     {
         if (!runFinished && Time.timeScale > 0f)
-            buildings.RefreshLoadedBuildings();
+            buildings?.RefreshLoadedBuildings();
     }
 
     private void LateUpdate()
@@ -87,7 +92,7 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         FallBackToMeshes();
     }
 
-    public void RecordGroundStep(Vector3 position)
+    public void RecordGroundStep(Vector3 position, bool evaluateClaims = true)
     {
         if (runFinished || openLine == null) return;
         Vector3 local = ToLocal(position);
@@ -99,23 +104,65 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         if (!TryGroundPoint(point, TrailHeight, out Vector3 groundPoint))
             return;
 
-        if (shape.TryClaimAgainstBoundary(trail, point, CloseDistance, out Paths64 triangles) ||
-            (trail.Count >= 5 && TryCloseTrail(point, out triangles)))
+        if (evaluateClaims && (shape.TryClaimAgainstBoundary(trail, point, CloseDistance, out Paths64 triangles) ||
+            (trail.Count >= 5 && TryCloseTrail(point, out triangles))))
         {
+            match.Claim(this, shape.LastClaim);
             DrawClaimedGround(triangles, groundPoint.y);
-            buildings.RefreshLoadedBuildings();
+            buildings?.RefreshLoadedBuildings();
             ClearOpenTrail();
             // A new trail may start on the border that was just confirmed.
             shape.TryClaimAgainstBoundary(trail, point, CloseDistance, out _);
         }
 
+        lastTrailHeight = groundPoint.y;
         trail.Add(point);
         openLine.positionCount = trail.Count;
         openLine.SetPosition(trail.Count - 1, Quaternion.Inverse(TrailRotation) * groundPoint);
     }
 
+    internal void CompleteNpcLoop(List<Vector2> polygon)
+    {
+        if (!runFinished && openLine != null && shape.TryClaimLoop(polygon, out Paths64 triangles))
+        {
+            match.Claim(this, shape.LastClaim);
+            DrawClaimedGround(triangles, lastTrailHeight);
+        }
+        // A completed walk must end even when the polygon adds no new area.
+        ClearOpenTrail();
+    }
+
+    internal int OpenTrailPointCount => trail.Count;
+
+    internal void RefreshBuildingOwnership() => buildings?.RefreshLoadedBuildings();
+
+    internal void RemoveClaim(Paths64 claimed)
+    {
+        if (!shape.Remove(claimed)) return;
+        // SetPaths invalidates old boundary contacts, but the visible open trail remains playable.
+        StopAllCoroutines();
+        fillingGround = false;
+        gpuBordersPending = false;
+        pendingFills.Clear();
+        gpuFills.Clear();
+        foreach (GameObject obj in fillObjects) Destroy(obj);
+        fillObjects.Clear();
+        foreach (Mesh mesh in fillMeshes) Destroy(mesh);
+        fillMeshes.Clear();
+        Paths64 triangles = shape.Triangles();
+        if (triangles.Count > 0) gpuFills.Add((triangles, gpuBorderHeight));
+        if (gpuGround != null && !gpuGround.TryReplace(triangles)) FallBackToMeshes();
+        else if (gpuGround == null && triangles.Count > 0)
+        {
+            pendingFills.Enqueue((triangles, gpuBorderHeight));
+            StartPendingMeshFills();
+        }
+        RedrawBorders(gpuBorderHeight);
+    }
+
     private void DrawClaimedGround(Paths64 triangles, float borderHeight)
     {
+        gpuBorderHeight = borderHeight;
         if (gpuGround == null)
         {
             pendingFills.Enqueue((triangles, borderHeight));
@@ -284,12 +331,13 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         }
 
         if (indices.Count == 0) yield break;
-        var mesh = new Mesh { name = "Confirmed blue area", indexFormat = IndexFormat.UInt32 };
+        var mesh = new Mesh { name = "Confirmed area", indexFormat = IndexFormat.UInt32 };
         mesh.SetVertices(vertices);
         mesh.SetTriangles(indices, 0);
         fillMeshes.Add(mesh);
-        var obj = new GameObject("Confirmed blue area");
+        var obj = new GameObject("Confirmed area");
         obj.transform.SetParent(transform, false);
+        fillObjects.Add(obj);
         obj.AddComponent<MeshFilter>().sharedMesh = mesh;
         MeshRenderer renderer = obj.AddComponent<MeshRenderer>();
         renderer.sharedMaterial = fillMaterial;
@@ -362,7 +410,6 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
         foreach (Mesh mesh in fillMeshes) Destroy(mesh);
         Destroy(lineMaterial);
         Destroy(fillMaterial);
-        Destroy(buildingMaterial);
     }
 
 }

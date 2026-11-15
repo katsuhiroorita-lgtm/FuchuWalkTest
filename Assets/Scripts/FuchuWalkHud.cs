@@ -112,7 +112,11 @@ public sealed class FuchuWalkHud : MonoBehaviour
             return;
         }
         if (raining) DrawRain();
-        if (player != null) DrawPlayerStatus();
+        if (player != null)
+        {
+            DrawPlayerStatus();
+            DrawBattleStandings(new Rect(Screen.width - 346f, Screen.height - 231f, 330f, 215f));
+        }
         if (!visible) return;
 
         GUI.Box(new Rect(16, 16, 366, 178), GUIContent.none, panelStyle);
@@ -145,7 +149,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
 
     private void DrawPlayerStatus()
     {
-        Rect panel = new Rect(16f, Screen.height - 231f, 330f, 215f);
+        Rect panel = new Rect(16f, Screen.height - 257f, 330f, 241f);
         GUI.Box(panel, GUIContent.none, panelStyle);
         int seconds = (int)System.Math.Ceiling(player.RemainingRunSeconds);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 7f, 264f, 26f),
@@ -165,13 +169,15 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.Label(new Rect(panel.x + 12f, panel.y + 81f, 196f, 22f),
             $"確定エリア  {player.TerritoryCoverage * 100.0:0.0000}%", textStyle);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 105f, 264f, 22f),
-            $"エリア内の建物ポイント  {player.BuildingPoints:N0} pt", textStyle);
+            $"所有中の建物ポイント  {player.BuildingPoints:N0} pt", textStyle);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 131f, 264f, 22f),
             $"速度  Lv{player.SpeedLevel}　頑丈さ  Lv{player.ToughnessLevel}", textStyle);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 157f, 306f, 22f),
             $"移動速度ポイント（緑）  {player.MovementPoints:N1} pt", textStyle);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 183f, 306f, 22f),
             $"頑丈さポイント（赤）  {player.ToughnessPoints:N1} pt", textStyle);
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 209f, 306f, 22f),
+            $"スタミナ上限ポイント（黄）  {player.StaminaCapacityPoints:N0} pt", textStyle);
     }
 
     private void DrawMenuScreen()
@@ -185,7 +191,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.color = previousColor;
 
         const float width = 480f;
-        float height = player.RunFinished ? 510f : 330f;
+        float height = player.RunFinished ? 710f : 330f;
         float scale = Mathf.Min(1f, Mathf.Min((Screen.width - 20f) / width, (Screen.height - 20f) / height));
         if (scale <= 0f)
         {
@@ -252,14 +258,15 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.Label(new Rect(24, 18, 432, 38), "タイムアップ", resultTitleStyle);
         GUI.Label(new Rect(32, 69, 416, 26), $"確定エリア面積  {player.TerritoryCoverage * 100.0:0.0000}%", headingStyle);
         GUI.Label(new Rect(32, 100, 416, 26), $"延床面積ポイント合計  {player.BuildingPoints:N0} pt", headingStyle);
-        GUI.Label(new Rect(32, 134, 416, 24),
-            player.RunRank > 0 ? $"今回の順位  {player.RunRank}位" : "今回の順位  トップ10圏外", textStyle);
-        GUI.Label(new Rect(32, 173, 416, 26), "面積ランキング　この端末の上位10件", headingStyle);
+        DrawBattleStandings(new Rect(32, 136, 416, 190));
+        GUI.Label(new Rect(32, 337, 416, 24),
+            player.RunRank > 0 ? $"端末記録での順位  {player.RunRank}位" : "端末記録での順位  トップ10圏外", textStyle);
+        GUI.Label(new Rect(32, 368, 416, 26), "面積ランキング　この端末の上位10件", headingStyle);
 
         for (int i = 0; i < player.Ranking.Count; i++)
         {
             FuchuRunRanking.Entry entry = player.Ranking[i];
-            float y = 208f + i * 22f;
+            float y = 403f + i * 22f;
             string marker = player.RunRank == i + 1 ? "▶" : "";
             GUI.Label(new Rect(32, y, 70, 22), $"{marker}{i + 1}位", textStyle);
             GUI.Label(new Rect(110, y, 150, 22), $"{entry.coverage * 100.0:0.0000}%", textStyle);
@@ -268,10 +275,29 @@ public sealed class FuchuWalkHud : MonoBehaviour
 
         bool previousEnabled = GUI.enabled;
         GUI.enabled = previousEnabled && !player.ReloadPending;
-        bool retry = GUI.Button(new Rect(48, 450, 184, 40), player.ReloadPending ? "読み込み中…" : "Retry");
-        bool home = GUI.Button(new Rect(248, 450, 184, 40), "Home");
+        bool retry = GUI.Button(new Rect(48, 650, 184, 40), player.ReloadPending ? "読み込み中…" : "Retry");
+        bool home = GUI.Button(new Rect(248, 650, 184, 40), "Home");
         GUI.enabled = previousEnabled;
         if (retry || home) player.ReloadRun(startImmediately: retry);
+    }
+
+    private void DrawBattleStandings(Rect panel)
+    {
+        if (player.Battle == null) return;
+        GUI.Box(panel, GUIContent.none, panelStyle);
+        GUI.Label(new Rect(panel.x + 12, panel.y + 8, panel.width - 24, 26),
+            player.RunFinished ? "対戦結果（確保面積順）" : "5人対戦（確保面積順）", headingStyle);
+        int row = 0;
+        foreach (FuchuBattleMatch.Participant entry in player.Battle.Standings())
+        {
+            float y = panel.y + 42 + row++ * 27;
+            Color previous = GUI.color;
+            GUI.color = entry.Color;
+            GUI.DrawTexture(new Rect(panel.x + 12, y + 4, 14, 14), whiteTexture);
+            GUI.color = previous;
+            GUI.Label(new Rect(panel.x + 34, y, panel.width - 46, 24),
+                $"{player.Battle.Rank(entry)}位 {entry.Name}（{entry.ColorName}）  {entry.Territory.Coverage * 100.0:0.0000}%", textStyle);
+        }
     }
 
     private void EnsureStyles()

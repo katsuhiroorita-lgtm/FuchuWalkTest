@@ -109,6 +109,17 @@ internal sealed class FuchuGpuGroundFill : IDisposable
         return true;
     }
 
+    public bool TryReplace(Paths64 triangles)
+    {
+        if (!mask.IsCreated()) return false;
+        commands.Clear();
+        commands.SetRenderTarget(mask, RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store);
+        commands.ClearRenderTarget(false, true, Color.clear);
+        Graphics.ExecuteCommandBuffer(commands);
+        hasFill = false;
+        return triangles.Count == 0 || TryStamp(triangles);
+    }
+
     public bool TryStamp(Paths64 triangles)
     {
         if (!mask.IsCreated()) return false;

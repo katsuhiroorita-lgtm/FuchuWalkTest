@@ -4,6 +4,31 @@ using UnityEngine;
 /// <summary>Uses a per-game seed and building ID so streamed tiles share one stable building effect.</summary>
 public sealed class FuchuBuildingEffects : MonoBehaviour
 {
+    internal enum EffectKind { Movement, Toughness, StaminaCapacity }
+
+    internal static double PointsFor(EffectKind kind, double floorAreaPoints) =>
+        kind == EffectKind.StaminaCapacity ? floorAreaPoints : floorAreaPoints / 10.0;
+
+    internal static string EffectName(EffectKind kind)
+    {
+        switch (kind)
+        {
+            case EffectKind.Movement: return "移動速度ポイント（緑）";
+            case EffectKind.Toughness: return "頑丈さポイント（赤）";
+            default: return "スタミナ上限ポイント（黄）";
+        }
+    }
+
+    private static Color EffectColor(EffectKind kind)
+    {
+        switch (kind)
+        {
+            case EffectKind.Movement: return new Color(0.1f, 1f, 0.25f);
+            case EffectKind.Toughness: return new Color(1f, 0.12f, 0.08f);
+            default: return new Color(1f, 0.9f, 0.08f);
+        }
+    }
+
     private readonly Dictionary<string, Source> sources = new Dictionary<string, Source>();
     private uint seed;
     private Vector2 center;
@@ -12,6 +37,8 @@ public sealed class FuchuBuildingEffects : MonoBehaviour
     private Material material;
     private float nextEmission;
     private FuchuWalkController player;
+
+    internal Vector3 PlayableCenter => new Vector3(center.x, 0f, center.y);
 
     private void Awake()
     {
@@ -60,7 +87,7 @@ public sealed class FuchuBuildingEffects : MonoBehaviour
         particles.Play();
     }
 
-    internal bool IsMovement(string id)
+    internal EffectKind GetEffect(string id)
     {
         uint hash = seed;
         unchecked
@@ -70,7 +97,7 @@ public sealed class FuchuBuildingEffects : MonoBehaviour
             hash *= 2246822519u;
             hash ^= hash >> 13;
         }
-        return (hash & 1u) == 0u;
+        return (EffectKind)(hash % 3u);
     }
 
     internal bool OverlapsPlayableArea(Rect bounds)
@@ -115,7 +142,7 @@ public sealed class FuchuBuildingEffects : MonoBehaviour
                     position = worldRoot != null ? worldRoot.TransformPoint(position) : position,
                     velocity = (worldRoot != null ? worldRoot.up : Vector3.up) * Random.Range(0.7f, 1.2f),
                     startSize = Random.Range(0.5f, 0.9f),
-                    startColor = IsMovement(entry.Key) ? new Color(0.1f, 1f, 0.25f) : new Color(1f, 0.12f, 0.08f)
+                    startColor = EffectColor(GetEffect(entry.Key))
                 }, 1);
             }
         }

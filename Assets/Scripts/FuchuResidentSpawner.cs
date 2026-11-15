@@ -155,13 +155,27 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
             if (material != null) Destroy(material);
     }
 
-    private TriangleNode[] BuildSidewalkGraph(Mesh mesh, Transform roadTransform, Transform root, Vector3 center, float radius)
+    internal static TriangleNode[] BuildSidewalkGraph(Mesh mesh, Transform roadTransform, Transform root, Vector3 center, float radius, bool weldConnections = false)
     {
         Vector3[] sourceVertices = mesh.vertices;
         int[] triangles = mesh.triangles;
         var localVertices = new Vector3[sourceVertices.Length];
         for (int i = 0; i < sourceVertices.Length; i++)
             localVertices[i] = root.InverseTransformPoint(roadTransform.TransformPoint(sourceVertices[i]));
+
+        // Imported/generated meshes may duplicate a position at triangle or polygon seams.
+        // Edge detection already compares positions; adjacency must use the same identity.
+        var connectionIds = new int[localVertices.Length];
+        var positions = new Dictionary<(long X, long Z), int>();
+        for (int i = 0; i < localVertices.Length; i++)
+        {
+            connectionIds[i] = i;
+            if (!weldConnections) continue;
+            Vector3 point = localVertices[i];
+            var key = ((long)Math.Round(point.x * 10.0), (long)Math.Round(point.z * 10.0));
+            if (!positions.TryGetValue(key, out int id)) positions.Add(key, id = i);
+            connectionIds[i] = id;
+        }
 
         int triangleCount = triangles.Length / 3;
         var edgeTable = new Dictionary<EdgeKey, BoundaryEdge>(triangleCount * 2);
@@ -175,9 +189,9 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
             Vector3 b = localVertices[ib];
             Vector3 c = localVertices[ic];
             Vector3 centroid = (a + b + c) / 3f;
-            AddBoundaryCandidate(edgeTable, ia, ib, a, b, centroid);
-            AddBoundaryCandidate(edgeTable, ib, ic, b, c, centroid);
-            AddBoundaryCandidate(edgeTable, ic, ia, c, a, centroid);
+            AddBoundaryCandidate(edgeTable, connectionIds[ia], connectionIds[ib], a, b, centroid);
+            AddBoundaryCandidate(edgeTable, connectionIds[ib], connectionIds[ic], b, c, centroid);
+            AddBoundaryCandidate(edgeTable, connectionIds[ic], connectionIds[ia], c, a, centroid);
         }
 
         var candidates = new List<BoundaryEdge>();
@@ -447,7 +461,7 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
         return new Material(shader) { name = materialName, color = color, enableInstancing = true };
     }
 
-    private sealed class TriangleNode
+    internal sealed class TriangleNode
     {
         public readonly Vector3 Center;
         public readonly bool InsideRadius;

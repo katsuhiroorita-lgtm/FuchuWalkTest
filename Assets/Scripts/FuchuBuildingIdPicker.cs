@@ -151,8 +151,10 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
         nextInfo += $"\n延床面積ポイント: {FloorAreaPoints(floorArea):N0} pt";
         if (player != null && player.BuildingEffects != null && buildingId != "（IDなし）")
         {
-            string effectName = player.BuildingEffects.IsMovement(buildingId) ? "移動速度ポイント（緑）" : "頑丈さポイント（赤）";
-            nextInfo += $"\n建物効果: {effectName}\n効果ポイント: {FloorAreaPoints(floorArea) / 10.0:N1} pt";
+            FuchuBuildingEffects.EffectKind effect = player.BuildingEffects.GetEffect(buildingId);
+            string effectName = FuchuBuildingEffects.EffectName(effect);
+            double effectPoints = FuchuBuildingEffects.PointsFor(effect, FloorAreaPoints(floorArea));
+            nextInfo += $"\n建物効果: {effectName}\n効果ポイント: {effectPoints:N1} pt";
         }
         if (IsResidentialUsage(usage))
         {

@@ -67,11 +67,13 @@ public sealed class FuchuWalkController : MonoBehaviour
     private static bool startAfterReload;
 
     public double Stamina { get; private set; } = BaseStamina;
-    public double MaxStamina => BaseStamina + BuildingPoints;
-    public double BuildingPoints { get; private set; }
+    public double StaminaCapacityPoints => territory != null ? territory.StaminaCapacityPoints : 0.0;
+    public double MaxStamina => BaseStamina + StaminaCapacityPoints;
+    public double BuildingPoints => territory != null ? territory.BuildingPoints : 0.0;
     public double MovementPoints => territory != null ? territory.MovementPoints : 0.0;
     public int SpeedLevel => 1 + (int)System.Math.Min(MaximumSprintBonus, System.Math.Floor(MovementPoints / PointsPerSprintBonus));
     public double ToughnessPoints => territory != null ? territory.ToughnessPoints : 0.0;
+    internal FuchuBattleMatch Battle { get; private set; }
     internal FuchuBuildingEffects BuildingEffects { get; private set; }
     public int ToughnessLevel
     {
@@ -119,10 +121,8 @@ public sealed class FuchuWalkController : MonoBehaviour
     private void Start()
     {
         ChooseStartingPosition();
-        var territoryObject = new GameObject("Walking Territory");
-        territoryObject.transform.SetParent(transform.parent, false);
-        territory = territoryObject.AddComponent<FuchuWalkingTerritory>();
-        territory.Initialize(transform.position, BuildingEffects);
+        Battle = gameObject.AddComponent<FuchuBattleMatch>();
+        territory = Battle.Initialize(this, playerRenderer);
         var recoveryItems = new GameObject("Stamina Recovery Items");
         recoveryItems.transform.SetParent(transform.parent, false);
         recoveryItems.AddComponent<FuchuStaminaItems>().Initialize(this, characterController);
@@ -195,6 +195,7 @@ public sealed class FuchuWalkController : MonoBehaviour
             return;
         }
 
+        SyncOwnedGrowth();
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null)
             return;
@@ -266,7 +267,7 @@ public sealed class FuchuWalkController : MonoBehaviour
         if (sprinting && groundSpeed > 0.05f)
             Stamina = System.Math.Max(0.0, Stamina - SprintStaminaPerSecond * Time.deltaTime);
         if (groundSpeed > 0.05f) territory.RecordGroundStep(transform.position);
-        CreditBuildingPoints();
+        SyncOwnedGrowth();
         if (characterController.isGrounded && groundSpeed > 0.05f)
         {
             stepPhase = Mathf.Repeat(stepPhase + groundSpeed * Time.deltaTime * 3f, Mathf.PI * 2f);
@@ -279,17 +280,16 @@ public sealed class FuchuWalkController : MonoBehaviour
         }
     }
 
-    private void CreditBuildingPoints()
+    internal void SyncOwnedGrowth()
     {
-        double points = territory.BuildingPoints;
-        if (points <= BuildingPoints) return;
-        BuildingPoints = points;
+        Stamina = System.Math.Min(Stamina, MaxStamina);
+        sprintBonus = Mathf.Min(sprintBonus, SpeedLevel - 1);
     }
 
     internal void RecoverStamina(double fraction)
     {
         if (!IsPlaying) return;
-        CreditBuildingPoints();
+        SyncOwnedGrowth();
         Stamina = System.Math.Min(MaxStamina, Stamina + MaxStamina * fraction);
     }
 
@@ -314,8 +314,8 @@ public sealed class FuchuWalkController : MonoBehaviour
     private void FinishRun()
     {
         RunFinished = true;
-        territory.FinishRun();
-        CreditBuildingPoints();
+        Battle.Finish();
+        SyncOwnedGrowth();
         PauseForMenu();
         Ranking = FuchuRunRanking.Record(TerritoryCoverage, BuildingPoints, out int rank);
         RunRank = rank;
