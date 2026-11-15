@@ -67,6 +67,12 @@ internal sealed class FuchuTerritoryShape
         walkedOutside = false;
     }
 
+    internal double AdditionalSquareMeters(List<Vector2> polygon)
+    {
+        Paths64 candidate = Normalize(ToPath(polygon));
+        return Math.Abs(Clipper.Area(Clipper.Difference(candidate, paths, FillRule.NonZero))) / UnitsPerSquareMeter;
+    }
+
     public bool TryClaimLoop(List<Vector2> polygon, out Paths64 triangles)
     {
         return TryClaim(Normalize(ToPath(polygon)), out triangles);

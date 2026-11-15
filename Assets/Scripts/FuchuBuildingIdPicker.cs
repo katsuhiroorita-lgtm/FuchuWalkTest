@@ -39,7 +39,7 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
 
     private void Update()
     {
-        if (player != null && !player.IsPlaying) return;
+        if (player != null && (!player.IsPlaying || player.MenuOpen)) return;
         if (Time.unscaledTime < nextTargetScanTime) return;
         nextTargetScanTime = Time.unscaledTime + Mathf.Max(0.05f, targetScanInterval);
         ScanTargetBuilding();
@@ -115,7 +115,7 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
             return;
         }
 
-        string featureKey = primitiveFeatures.GetInstanceID() + ":" + tableIndex + ":" + featureId;
+        string featureKey = primitiveFeatures.GetInstanceID() + ":" + tableIndex + ":" + featureId + ":" + FuchuWalkHud.ShowBuildingIds;
         if (currentFeatureKey == featureKey)
         {
             status = "照準中";
@@ -125,51 +125,19 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
         Dictionary<string, CesiumMetadataValue> values = table.GetMetadataValuesForFeature(featureId);
         string buildingId = ReadString(values, "gml_id", "").Trim();
         string usage = ReadString(values, "bldg:usage", "");
-        double height = ReadNumber(values, "bldg:measuredHeight", -1.0);
-        double floorArea = EstimateFloorArea(values, out double footprintArea, out int floors);
-
-        string usageCode = NormalizeUsageCode(usage);
-        string usageName = UsageName(usageCode);
-        string usageText = int.TryParse(usageCode, out _) ? $"{usageCode}（{usageName}）" : usageName;
-        string displayName = buildingNames.TryGetValue(buildingId, out string registeredName) ? registeredName : usageName;
-        if (buildingId.Length == 0) buildingId = "（IDなし）";
-        string heightText = height >= 0.0 ? height.ToString("0.##") + " m" : "（不明）";
-        string floorText = floors >= 0 && floors != 9999 ? floors.ToString() + " 階" : "（不明）";
-
-        string nextInfo = "建物名: " + displayName + "\n建物ID: " + buildingId + "\n用途: " + usageText +
-            "\n高さ: " + heightText + "\n地上階数: " + floorText;
-        bool canEstimateFloorArea = floorArea > 0.0;
-        if (canEstimateFloorArea)
-        {
-            nextInfo += "\n建築面積: 約" + footprintArea.ToString("N1") + " m²";
-            nextInfo += $"\n延床面積の目安: 約{RoundFloorArea(floorArea):N0} m²";
-        }
-        else
-        {
-            nextInfo += "\n延床面積の目安: （不明）";
-        }
-        nextInfo += $"\n延床面積ポイント: {FloorAreaPoints(floorArea):N0} pt";
-        if (player != null && player.BuildingEffects != null && buildingId != "（IDなし）")
+        double floorArea = EstimateFloorArea(values, out _, out _);
+        string displayName = buildingNames.TryGetValue(buildingId, out string registeredName)
+            ? registeredName : UsageName(NormalizeUsageCode(usage));
+        bool hasId = buildingId.Length > 0;
+        string nextInfo = "建物名: " + displayName;
+        if (FuchuWalkHud.ShowBuildingIds) nextInfo += "\n建物ID: " + (hasId ? buildingId : "（IDなし）");
+        if (player != null && player.BuildingEffects != null && hasId)
         {
             FuchuBuildingEffects.EffectKind effect = player.BuildingEffects.GetEffect(buildingId);
-            string effectName = FuchuBuildingEffects.EffectName(effect);
             double effectPoints = FuchuBuildingEffects.PointsFor(effect, FloorAreaPoints(floorArea));
-            nextInfo += $"\n建物効果: {effectName}\n効果ポイント: {effectPoints:N1} pt";
+            nextInfo += $"\n建物効果: {FuchuBuildingEffects.EffectName(effect)}\n効果ポイント: {effectPoints:N1} pt";
         }
-        if (IsResidentialUsage(usage))
-        {
-            if (canEstimateFloorArea)
-            {
-                double residentialFloorArea = floorArea * ResidentialShare(usage);
-                double areaPerPerson = NormalizeUsageCode(usage) == "412" ? 25.0 : 30.0;
-                int estimatedResidents = Mathf.Max(1, Mathf.RoundToInt((float)(residentialFloorArea / areaPerPerson)));
-                nextInfo += "\n居住人数の目安: 約" + estimatedResidents + " 人*";
-            }
-            else
-            {
-                nextInfo += "\n居住人数の目安: 面積または階数情報がないため算出できません";
-            }
-        }
+        else nextInfo += "\n建物効果: （不明）\n効果ポイント: （不明）";
 
         currentFeatureKey = featureKey;
         selectedInfo = nextInfo;
@@ -185,20 +153,14 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
 
     private void OnGUI()
     {
-        if (player != null && !player.IsPlaying) return;
+        if (player != null && (!player.IsPlaying || player.MenuOpen)) return;
         EnsureStyles();
         const float width = 470f;
-        float panelHeight = string.IsNullOrEmpty(selectedInfo) ? 82f : 337f;
+        float panelHeight = string.IsNullOrEmpty(selectedInfo) ? 62f : FuchuWalkHud.ShowBuildingIds ? 172f : 142f;
         float left = Screen.width - width - 16f;
         GUI.Box(new Rect(left, 16f, width, panelHeight), GUIContent.none, panelStyle);
-        GUI.Label(new Rect(left + 14f, 22f, width - 28f, 24f), "建物情報（中央の照準で自動表示）", textStyle);
-        GUI.Label(new Rect(left + 14f, 48f, width - 28f, 28f), status, textStyle);
-
-        if (!string.IsNullOrEmpty(selectedInfo))
-        {
-            GUI.Label(new Rect(left + 14f, 78f, width - 28f, panelHeight - 88f), selectedInfo, textStyle);
-            GUI.Label(new Rect(left + 14f, panelHeight - 5f, width - 28f, 18f), "*居住人数は面積と階数からの概算です", smallTextStyle);
-        }
+        GUI.Label(new Rect(left + 14f, 26f, width - 28f, panelHeight - 16f),
+            string.IsNullOrEmpty(selectedInfo) ? status : selectedInfo, textStyle);
 
         float centerX = Screen.width * 0.5f;
         float centerY = Screen.height * 0.5f;

@@ -155,7 +155,7 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
             if (material != null) Destroy(material);
     }
 
-    internal static TriangleNode[] BuildSidewalkGraph(Mesh mesh, Transform roadTransform, Transform root, Vector3 center, float radius, bool weldConnections = false)
+    internal static TriangleNode[] BuildSidewalkGraph(Mesh mesh, Transform roadTransform, Transform root, Vector3 center, float radius, bool weldConnections = false, List<TriangleNode> travelNodes = null)
     {
         Vector3[] sourceVertices = mesh.vertices;
         int[] triangles = mesh.triangles;
@@ -206,7 +206,7 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
             float dx = midpoint.x - center.x;
             float dz = midpoint.z - center.z;
             if (dx * dx + dz * dz <= radiusSquared)
-                candidates.Add(new BoundaryEdge(edge.VertexA, edge.VertexB, midpoint));
+                candidates.Add(new BoundaryEdge(edge.VertexA, edge.VertexB, midpoint, edge.Interior));
         }
 
         var graph = new TriangleNode[candidates.Count];
@@ -227,6 +227,54 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
                     if (!graph[a].Neighbors.Contains(b)) graph[a].Neighbors.Add(b);
                     if (!graph[b].Neighbors.Contains(a)) graph[b].Neighbors.Add(a);
                 }
+        }
+        if (travelNodes != null)
+        {
+            // Keep boundary indices stable; use separate nodes for transit across road interiors.
+            foreach (TriangleNode node in graph)
+            {
+                var copy = new TriangleNode(node.Center, node.InsideRadius);
+                copy.Neighbors.AddRange(node.Neighbors);
+                travelNodes.Add(copy);
+            }
+            var edgeNodes = new Dictionary<EdgeKey, int>();
+            var centers = new Dictionary<Vector3, int>();
+            for (int t = 0; t < triangles.Length; t += 3)
+            {
+                Vector3 a = localVertices[triangles[t]], b = localVertices[triangles[t + 1]], c = localVertices[triangles[t + 2]];
+                if (!Inside(a) || !Inside(b) || !Inside(c)) continue;
+                Vector3 centroid = (a + b + c) / 3f;
+                int middle = travelNodes.Count;
+                travelNodes.Add(new TriangleNode(centroid, true));
+                centers[centroid] = middle;
+                ConnectEdge(a, b, middle);
+                ConnectEdge(b, c, middle);
+                ConnectEdge(c, a, middle);
+            }
+            for (int i = 0; i < candidates.Count; i++)
+                if (centers.TryGetValue(candidates[i].Interior, out int middle)) Link(i, middle);
+
+            bool Inside(Vector3 point)
+            {
+                float x = point.x - center.x, z = point.z - center.z;
+                return x * x + z * z <= radiusSquared;
+            }
+            void ConnectEdge(Vector3 a, Vector3 b, int middle)
+            {
+                var key = new EdgeKey(a, b);
+                if (!edgeNodes.TryGetValue(key, out int edge))
+                {
+                    edge = travelNodes.Count;
+                    travelNodes.Add(new TriangleNode((a + b) * 0.5f, true));
+                    edgeNodes.Add(key, edge);
+                }
+                Link(middle, edge);
+            }
+            void Link(int a, int b)
+            {
+                if (!travelNodes[a].Neighbors.Contains(b)) travelNodes[a].Neighbors.Add(b);
+                if (!travelNodes[b].Neighbors.Contains(a)) travelNodes[b].Neighbors.Add(a);
+            }
         }
         return graph;
     }
@@ -479,9 +527,9 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
         {
             VertexA = vertexA; VertexB = vertexB; A = a; B = b; Interior = interior; Center = (a + b) * 0.5f; Count = 1;
         }
-        public BoundaryEdge(int vertexA, int vertexB, Vector3 center)
+        public BoundaryEdge(int vertexA, int vertexB, Vector3 center, Vector3 interior)
         {
-            VertexA = vertexA; VertexB = vertexB; Center = center; A = B = Interior = center; Count = 1;
+            VertexA = vertexA; VertexB = vertexB; Center = center; A = B = center; Interior = interior; Count = 1;
         }
     }
 

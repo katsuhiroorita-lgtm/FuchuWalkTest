@@ -525940,8 +525940,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::FuchuWalkController
   cameraTransform: {fileID: 330585546}
-  walkSpeed: 4.5
-  sprintSpeed: 7
+  walkSpeed: 6.5
+  sprintSpeed: 9
   lookSensitivity: 0.12
   jumpHeight: 1.65
   gravity: -20

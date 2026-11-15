@@ -114,7 +114,12 @@ public sealed class FuchuStaminaItems : MonoBehaviour
         for (int i = 0; i < locations.Count; i++)
         {
             point = locations[(start + i) % locations.Count];
-            if ((point - player.transform.position).sqrMagnitude < 10f * 10f) continue;
+            bool nearParticipant = false;
+            if (player.Battle != null)
+                foreach (FuchuBattleMatch.Participant participant in player.Battle.Players)
+                    if (participant.Character != null && (point - participant.Character.position).sqrMagnitude < 100f)
+                    { nearParticipant = true; break; }
+            if (nearParticipant || (point - player.transform.position).sqrMagnitude < 100f) continue;
             if (item.Collider != null && (point - item.Collider.transform.position).sqrMagnitude < 10f * 10f) continue;
             bool occupied = false;
             foreach (Item other in items)
@@ -130,6 +135,45 @@ public sealed class FuchuStaminaItems : MonoBehaviour
         }
         point = default;
         return false;
+    }
+
+    internal bool TryFindNearbyItem(Vector3 position, float radius, System.Predicate<Vector3> reachable,
+        out int index, out Vector3 groundPosition)
+    {
+        index = -1;
+        groundPosition = default;
+        float nearest = radius * radius;
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (!TryGetItemPosition(i, out Vector3 point)) continue;
+            float distance = (point - position).sqrMagnitude;
+            if (distance >= nearest || !reachable(point)) continue;
+            nearest = distance;
+            index = i;
+            groundPosition = point;
+        }
+        return index >= 0;
+    }
+
+    internal bool TryGetItemPosition(int index, out Vector3 groundPosition)
+    {
+        groundPosition = default;
+        if (index < 0 || index >= items.Count) return false;
+        Item item = items[index];
+        if (item.Collider == null || !item.Collider.enabled) return false;
+        groundPosition = item.Collider.transform.position - transform.up * (item.Size * 0.5f + 0.15f);
+        return true;
+    }
+
+    internal bool TryCollectNpcItem(int index, Vector3 position, out double fraction)
+    {
+        fraction = 0.0;
+        if (!TryGetItemPosition(index, out Vector3 point) || (point - position).sqrMagnitude > 2.25f) return false;
+        Item item = items[index];
+        fraction = item.Fraction;
+        item.Collider.enabled = false;
+        item.Collider.GetComponent<Renderer>().enabled = false;
+        return true;
     }
 
     private void Update()

@@ -15,6 +15,8 @@ public sealed class FuchuBattleMatch : MonoBehaviour
         internal Color Color;
         internal Transform Character;
         internal FuchuWalkingTerritory Territory;
+        internal double MovementPoints;
+        internal double StaminaCapacityPoints;
     }
 
     private readonly List<Participant> players = new List<Participant>(PlayerCount);
@@ -62,10 +64,12 @@ public sealed class FuchuBattleMatch : MonoBehaviour
         Transform root = transform.parent;
         Transform road = root != null ? root.Find("FuchuLocalRoads_1000m") : null;
         FuchuResidentSpawner.TriangleNode[] graph = null;
+        var travelNodes = new List<FuchuResidentSpawner.TriangleNode>();
         if (road != null && road.TryGetComponent(out MeshFilter filter) && filter.sharedMesh != null)
             graph = FuchuResidentSpawner.BuildSidewalkGraph(filter.sharedMesh, road, root,
-                localPlayer.BuildingEffects.PlayableCenter, 995f, weldConnections: true);
+                localPlayer.BuildingEffects.PlayableCenter, 995f, weldConnections: true, travelNodes: travelNodes);
         var routes = FuchuBattleNpc.FindLoops(graph);
+        if (travelNodes.Count > 0) graph = travelNodes.ToArray();
         var starts = new List<Vector3> { transform.localPosition };
         for (int i = 1; i < PlayerCount; i++)
         {

@@ -10,7 +10,6 @@ public sealed class FuchuWalkHud : MonoBehaviour
     private const float MinutesPerGameDay = 24f * 60f;
     private const float SecondsPerGameDayAtNormalSpeed = 120f;
     private FuchuWalkController player;
-    private bool visible = true;
     private bool creditsVisible;
     private bool timeMenuVisible;
     private bool optionsVisible;
@@ -34,6 +33,11 @@ public sealed class FuchuWalkHud : MonoBehaviour
     private GUIStyle headingStyle;
     private GUIStyle textStyle;
     private GUIStyle resultTitleStyle;
+
+    internal static bool ShowBuildingIds { get; private set; }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void LoadOptions() => ShowBuildingIds = PlayerPrefs.GetInt("Fuchu.ShowBuildingIds", 0) != 0;
 
     public bool TimeMenuVisible => timeMenuVisible;
     public float NightFactor
@@ -72,10 +76,10 @@ public sealed class FuchuWalkHud : MonoBehaviour
         if (player != null && !player.IsPlaying) return;
 
         Keyboard keyboard = Keyboard.current;
-        if (keyboard != null)
+        if (keyboard != null && (player == null || !player.MenuOpen))
         {
-            if (keyboard.f1Key.wasPressedThisFrame) visible = !visible;
             if (keyboard.f2Key.wasPressedThisFrame) creditsVisible = !creditsVisible;
+#if UNITY_EDITOR
             if (keyboard.f3Key.wasPressedThisFrame)
             {
                 raining = !raining;
@@ -90,6 +94,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
                     Cursor.visible = true;
                 }
             }
+#endif
         }
 
         float minutesPerSecond = MinutesPerGameDay / SecondsPerGameDayAtNormalSpeed;
@@ -106,7 +111,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
     private void OnGUI()
     {
         EnsureStyles();
-        if (player != null && !player.IsPlaying)
+        if (player != null && (!player.IsPlaying || player.MenuOpen))
         {
             DrawMenuScreen();
             return;
@@ -117,14 +122,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
             DrawPlayerStatus();
             DrawBattleStandings(new Rect(Screen.width - 346f, Screen.height - 231f, 330f, 215f));
         }
-        if (!visible) return;
-
-        GUI.Box(new Rect(16, 16, 366, 178), GUIContent.none, panelStyle);
-        GUI.Label(new Rect(30, 24, 330, 28), "府中まち歩き Prototype", headingStyle);
-        GUI.Label(new Rect(30, 56, 340, 130),
-            "W / A / S / D：移動　マウス：視点変更\nShift：走る　Space：ジャンプ\nEsc：一時中断　F1：案内　F2：出典\nF3：雨切替　F4：時間設定　F5：開始地点へ戻る\n時刻 " + FormatTime() + "　天気 " + WeatherName() + "\n1日 " + DayLengthText(),
-            textStyle);
-
+#if UNITY_EDITOR
         if (timeMenuVisible)
         {
             GUI.Box(new Rect(16, 204, 366, 122), GUIContent.none, panelStyle);
@@ -136,6 +134,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
             DrawSpeedButton(new Rect(278, 248, 56, 34), 4f, "4x");
         }
 
+#endif
         if (creditsVisible)
         {
             float y = timeMenuVisible ? 336f : 204f;
@@ -186,12 +185,12 @@ public sealed class FuchuWalkHud : MonoBehaviour
         Color previousColor = GUI.color;
         Matrix4x4 previousMatrix = GUI.matrix;
         GUI.depth = -100;
-        GUI.color = new Color(0.035f, 0.055f, 0.09f, 0.94f);
+        GUI.color = new Color(0.035f, 0.055f, 0.09f, player.MenuOpen ? 0.55f : 0.94f);
         GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), whiteTexture);
         GUI.color = previousColor;
 
         const float width = 480f;
-        float height = player.RunFinished ? 710f : 330f;
+        float height = player.RunFinished ? 710f : optionsVisible ? 380f : player.MenuOpen ? 590f : 330f;
         float scale = Mathf.Min(1f, Mathf.Min((Screen.width - 20f) / width, (Screen.height - 20f) / height));
         if (scale <= 0f)
         {
@@ -203,10 +202,10 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.Box(new Rect(0, 0, width, height), GUIContent.none, panelStyle);
         if (player.RunFinished)
             DrawResults();
-        else if (player.IsPaused)
-            DrawPauseMenu();
         else if (optionsVisible)
             DrawOptions();
+        else if (player.MenuOpen)
+            DrawGameplayMenu();
         else
             DrawStartMenu();
         GUI.matrix = previousMatrix;
@@ -221,9 +220,11 @@ public sealed class FuchuWalkHud : MonoBehaviour
         if (GUI.Button(new Rect(120, 201, 240, 44), "Exit")) Application.Quit();
     }
 
-    private void DrawPauseMenu()
+    internal void CloseGameplayMenu() => optionsVisible = false;
+
+    private void DrawGameplayMenu()
     {
-        GUI.Label(new Rect(24, 24, 432, 40), "一時中断", resultTitleStyle);
+        GUI.Label(new Rect(24, 24, 432, 40), "ゲームメニュー", resultTitleStyle);
         int seconds = (int)System.Math.Ceiling(player.RemainingRunSeconds);
         GUI.Label(new Rect(120, 85, 240, 26), $"残り時間  {seconds / 60:00}:{seconds % 60:00}", headingStyle);
 
@@ -232,12 +233,21 @@ public sealed class FuchuWalkHud : MonoBehaviour
         if (GUI.Button(new Rect(120, 128, 240, 44), "Continue")) player.ContinueRun();
         if (GUI.Button(new Rect(120, 184, 240, 44), "Retry")) player.ReloadRun(startImmediately: true);
         if (GUI.Button(new Rect(120, 240, 240, 44), "Home")) player.ReloadRun(startImmediately: false);
+        if (GUI.Button(new Rect(120, 296, 240, 44), "Option")) optionsVisible = true;
         GUI.enabled = previousEnabled;
+        GUI.Label(new Rect(24, 359, 432, 26), "操作説明", headingStyle);
+        string guide = "W / A / S / D：移動　マウス：視点変更\nShift：ダッシュ　Space：ジャンプ\nEsc：メニュー開閉　F2：出典表示\nF5：今回の開始地点へ戻る";
+#if UNITY_EDITOR
+        guide += "\n開発用：F3 雨切替／F4 時間設定";
+#endif
+        GUI.Label(new Rect(24, 393, 432, 130), guide, textStyle);
+        GUI.Label(new Rect(24, 520, 432, 22), "メニュー中もゲームは進行します", textStyle);
+        GUI.Label(new Rect(24, 548, 432, 22), "時刻 " + FormatTime() + "　天気 " + WeatherName(), textStyle);
     }
 
     private void DrawOptions()
     {
-        GUI.Label(new Rect(24, 18, 432, 40), "ディスプレイ表示設定", resultTitleStyle);
+        GUI.Label(new Rect(24, 18, 432, 40), "オプション", resultTitleStyle);
         string displayMode = Screen.fullScreen ? "フルスクリーン" : "ウィンドウ";
         GUI.Label(new Rect(120, 64, 340, 24), $"現在：{Screen.width} × {Screen.height}（{displayMode}）", textStyle);
 
@@ -250,7 +260,14 @@ public sealed class FuchuWalkHud : MonoBehaviour
             Resolution desktop = Screen.currentResolution;
             Screen.SetResolution(desktop.width, desktop.height, FullScreenMode.FullScreenWindow);
         }
-        if (GUI.Button(new Rect(120, 260, 240, 40), "戻る")) optionsVisible = false;
+        bool showIds = GUI.Toggle(new Rect(100, 254, 280, 30), ShowBuildingIds, "建物IDを表示する");
+        if (showIds != ShowBuildingIds)
+        {
+            ShowBuildingIds = showIds;
+            PlayerPrefs.SetInt("Fuchu.ShowBuildingIds", showIds ? 1 : 0);
+            PlayerPrefs.Save();
+        }
+        if (GUI.Button(new Rect(120, 312, 240, 40), "戻る")) optionsVisible = false;
     }
 
     private void DrawResults()

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections;
 using UnityEngine;
 using Unity.Profiling;
 
@@ -12,6 +13,18 @@ public sealed class FuchuBattleNpc : MonoBehaviour
     private List<int> route;
     private int target;
     private bool roaming;
+    private bool planning;
+    private bool transferring;
+    private List<List<int>> availableLoops;
+    private List<int> currentLoop;
+    private List<int> pendingLoop;
+    private readonly HashSet<List<int>> visitedLoops = new HashSet<List<int>>();
+    private int[] searchVisited;
+    private int[] searchParents;
+    private float[] searchDistance;
+    private int searchStamp;
+    private readonly Queue<int> searchQueue = new Queue<int>();
+    private static readonly ProfilerMarker SearchMarker = new ProfilerMarker("FuchuBattleNpc.SearchRoute");
     private readonly List<Vector2> loopPolygon = new List<Vector2>();
     private int evaluatedLoopVersion = -1;
     private const int MaxRoamingTrailPoints = 1024;
@@ -20,6 +33,17 @@ public sealed class FuchuBattleNpc : MonoBehaviour
     private MeshFilter visual;
     private MeshRenderer visualRenderer;
     private float phase;
+    private double stamina = FuchuWalkController.BaseStamina;
+    private float sprintBonus;
+    private float nextItemScan;
+    private int targetItem = -1;
+    private Vector3 itemPosition;
+    private Vector3 returnPosition;
+    private bool returningToRoute;
+    private Collider roadCollider;
+    private Predicate<Vector3> reachableItem;
+    private double MaxStamina => FuchuWalkController.BaseStamina + participant.StaminaCapacityPoints;
+    private int SpeedLevel => 1 + (int)Math.Min(FuchuWalkController.MaximumSprintBonus, Math.Floor(participant.MovementPoints / FuchuWalkController.PointsPerSprintBonus));
 
     internal void Initialize(FuchuWalkController controller, FuchuBattleMatch.Participant owner,
         FuchuResidentSpawner.TriangleNode[] nodes, List<List<int>> loops, List<Vector3> starts)
@@ -27,6 +51,16 @@ public sealed class FuchuBattleNpc : MonoBehaviour
         player = controller;
         participant = owner;
         graph = nodes;
+        availableLoops = loops;
+        if (nodes != null)
+        {
+            searchVisited = new int[nodes.Length];
+            searchParents = new int[nodes.Length];
+            searchDistance = new float[nodes.Length];
+        }
+        reachableItem = CanReachItem;
+        Transform road = transform.parent != null ? transform.parent.Find("FuchuLocalRoads_1000m") : null;
+        if (road != null) roadCollider = road.GetComponent<Collider>();
         // Prefer separate nearby blocks, so the first local match can be observed without crossing the city.
         float best = float.PositiveInfinity;
         Vector3 local = controller.transform.localPosition;
@@ -39,6 +73,7 @@ public sealed class FuchuBattleNpc : MonoBehaviour
             if (score >= best) continue;
             best = score;
             route = new List<int>(loop);
+            currentLoop = loop;
         }
         var obj = new GameObject("Player Visual", typeof(MeshFilter), typeof(MeshRenderer));
         obj.transform.SetParent(transform, false);
@@ -103,51 +138,252 @@ public sealed class FuchuBattleNpc : MonoBehaviour
             }
             else participant.Territory.ClearOpenTrail();
         }
+        if (!planning && availableLoops.Count > 1)
+        {
+            visitedLoops.Add(currentLoop);
+            planning = true;
+            StartCoroutine(FindExpansionRoute(route[0]));
+        }
+    }
+
+    private IEnumerator FindExpansionRoute(int start)
+    {
+        // One bounded breadth-first traversal; reused arrays avoid a new allocation per road node.
+        searchStamp++;
+        searchQueue.Clear();
+        searchVisited[start] = searchStamp;
+        searchParents[start] = -1;
+        searchDistance[start] = 0f;
+        searchQueue.Enqueue(start);
+        while (searchQueue.Count > 0 && player != null && !player.RunFinished)
+        {
+            using (SearchMarker.Auto())
+            {
+                for (int work = 0; work < 256 && searchQueue.Count > 0; work++)
+                {
+                    int node = searchQueue.Dequeue();
+                    foreach (int next in graph[node].Neighbors)
+                    {
+                        if (searchVisited[next] == searchStamp) continue;
+                        float distance = searchDistance[node] + Vector3.Distance(graph[node].Center, graph[next].Center);
+                        if (distance > 600f) continue;
+                        searchVisited[next] = searchStamp;
+                        searchParents[next] = node;
+                        searchDistance[next] = distance;
+                        searchQueue.Enqueue(next);
+                    }
+                }
+            }
+            yield return null;
+        }
+        if (player == null || player.RunFinished) { planning = false; yield break; }
+
+        // Shortlist nearby loops, preferring blocks not visited by this NPC yet.
+        var candidates = new List<(List<int> Loop, int Entry, float Cost)>();
+        int inspected = 0;
+        foreach (List<int> loop in availableLoops)
+        {
+            if (loop == currentLoop) continue;
+            int entry = -1;
+            float cost = float.PositiveInfinity;
+            for (int i = 0; i < loop.Count; i++)
+            {
+                int node = loop[i];
+                if (searchVisited[node] != searchStamp || searchDistance[node] >= cost) continue;
+                entry = i;
+                cost = searchDistance[node];
+            }
+            if (entry >= 0) candidates.Add((loop, entry, cost + (visitedLoops.Contains(loop) ? 200f : 0f)));
+            if (++inspected % 16 == 0) yield return null;
+        }
+        candidates.Sort((a, b) => a.Cost.CompareTo(b.Cost));
+        List<int> selected = null;
+        int selectedEntry = -1;
+        float bestScore = 0f;
+        var polygon = new List<Vector2>();
+        // Polygon difference is expensive: evaluate at most eight candidates, one per frame.
+        for (int i = 0; i < Mathf.Min(8, candidates.Count); i++)
+        {
+            if (player == null || player.RunFinished) { planning = false; yield break; }
+            using (SearchMarker.Auto())
+            {
+                var candidate = candidates[i];
+                polygon.Clear();
+                foreach (int node in candidate.Loop)
+                {
+                    Vector3 point = graph[node].Center;
+                    polygon.Add(new Vector2(point.x, point.z));
+                }
+                double added = participant.Territory.Shape.AdditionalSquareMeters(polygon);
+                float score = (float)added / (1f + candidate.Cost * 0.05f);
+                if (added >= 2.0 && score > bestScore)
+                {
+                    selected = candidate.Loop;
+                    selectedEntry = candidate.Entry;
+                    bestScore = score;
+                }
+            }
+            yield return null;
+        }
+        if (player == null || player.RunFinished || selected == null) { planning = false; yield break; }
+        var connection = new List<int>();
+        int destination = selected[selectedEntry];
+        for (int node = destination; node >= 0; node = searchParents[node]) connection.Add(node);
+        connection.Reverse();
+        pendingLoop = new List<int>(selected.Count);
+        for (int i = 0; i < selected.Count; i++) pendingLoop.Add(selected[(selectedEntry + i) % selected.Count]);
+        currentLoop = selected;
+        participant.Territory.ClearOpenTrail();
+        if (connection.Count > 1)
+        {
+            route = connection;
+            target = 1;
+            transferring = true;
+        }
+        else BeginNextLoop();
+        planning = false;
+    }
+
+    private void BeginNextLoop()
+    {
+        route = pendingLoop;
+        pendingLoop = null;
+        transferring = false;
+        target = 1;
+        evaluatedLoopVersion = -1;
+        loopPolygon.Clear();
+        foreach (int node in route)
+        {
+            Vector3 point = graph[node].Center;
+            loopPolygon.Add(new Vector2(point.x, point.z));
+        }
+        participant.Territory.ClearOpenTrail();
+    }
+
+    private bool CanReachItem(Vector3 destination)
+    {
+        if (roadCollider == null) return false;
+        Vector3 start = transform.position;
+        Vector3 up = transform.up;
+        int samples = Mathf.Max(1, Mathf.CeilToInt(Vector3.Distance(start, destination) / 1.5f));
+        Vector3 previous = start;
+        for (int i = 1; i <= samples; i++)
+        {
+            Vector3 sample = Vector3.Lerp(start, destination, (float)i / samples);
+            if (!roadCollider.Raycast(new Ray(sample + up * 20f, -up), out RaycastHit hit, 40f) ||
+                Vector3.Angle(hit.normal, up) > 45f) return false;
+            Vector3 feet = hit.point + up * 0.03f;
+            Vector3 direction = feet - previous;
+            float distance = direction.magnitude;
+            if (Physics.CheckCapsule(feet + up * 0.4f, feet + up * 1.5f, 0.28f,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return false;
+            if (distance > 0.001f && Physics.CapsuleCast(previous + up * 0.4f, previous + up * 1.5f,
+                0.28f, direction / distance, distance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return false;
+            previous = feet;
+        }
+        return true;
+    }
+
+    private void UpdateItemTarget()
+    {
+        FuchuStaminaItems items = player.RecoveryItems;
+        if (targetItem >= 0)
+        {
+            if (items == null || !items.TryGetItemPosition(targetItem, out Vector3 current) ||
+                (current - itemPosition).sqrMagnitude > 0.25f)
+            {
+                targetItem = -1;
+                returningToRoute = true;
+            }
+            return;
+        }
+        if (returningToRoute || items == null || Time.time < nextItemScan) return;
+        nextItemScan = Time.time + 0.5f;
+        if (items.TryFindNearbyItem(transform.position, 12f, reachableItem, out targetItem, out itemPosition))
+            returnPosition = transform.localPosition;
+    }
+
+    private void AdvanceRoute()
+    {
+        if (transferring)
+        {
+            if (target == route.Count - 1) BeginNextLoop();
+            else target++;
+        }
+        else if (roaming)
+        {
+            int current = route[target];
+            int previous = route[1 - target];
+            List<int> neighbors = graph[current].Neighbors;
+            int next = neighbors[UnityEngine.Random.Range(0, neighbors.Count)];
+            if (neighbors.Count > 1 && next == previous)
+                next = neighbors[(neighbors.IndexOf(next) + 1) % neighbors.Count];
+            route[1 - target] = next;
+            target = 1 - target;
+        }
+        else
+        {
+            if (target == 0) CompleteLoop();
+            target = (target + 1) % route.Count;
+        }
     }
 
     private void Update()
     {
-        if (player == null || !player.IsPlaying || route == null || Time.deltaTime <= 0f) return;
+        if (player == null || !player.IsPlaying || route == null || planning || Time.deltaTime <= 0f) return;
+        stamina = Math.Min(stamina, MaxStamina);
+        sprintBonus = Mathf.Min(sprintBonus, SpeedLevel - 1);
+        UpdateItemTarget();
         RecordTrail();
-        // Substeps preserve turns and closure even on a slow frame; no area is awarded without walking it.
-        float remaining = Mathf.Min(Time.deltaTime, 0.25f) * 4.5f;
+        float remainingTime = Mathf.Min(Time.deltaTime, 0.25f);
+        if (stamina > 0.00001)
+            sprintBonus = Mathf.MoveTowards(sprintBonus, SpeedLevel - 1, remainingTime * FuchuWalkController.SprintBonusPerSecond);
+        else sprintBonus = 0f;
+        float moved = 0f;
         int iterations = 0;
-        while (remaining > 0.0001f && iterations++ < 64)
+        while (remainingTime > 0.00001f && iterations++ < 128)
         {
-            Vector3 destination = graph[route[target]].Center + Vector3.up * 0.03f;
+            bool detour = targetItem >= 0 || returningToRoute;
+            Vector3 destination = returningToRoute ? returnPosition : targetItem >= 0
+                ? transform.parent.InverseTransformPoint(itemPosition) + Vector3.up * 0.03f
+                : graph[route[target]].Center + Vector3.up * 0.03f;
             Vector3 direction = destination - transform.localPosition;
             float distance = direction.magnitude;
-            float step = Mathf.Min(remaining, Mathf.Min(distance, 0.25f));
+            bool sprinting = stamina > 0.00001;
+            float slice = sprinting ? Mathf.Min(remainingTime, (float)(stamina / FuchuWalkController.SprintStaminaPerSecond)) : remainingTime;
+            if (!sprinting) sprintBonus = 0f;
+            float speed = sprinting ? player.BaseSprintSpeed + sprintBonus : player.WalkingSpeed;
+            float step = Mathf.Min(distance, Mathf.Min(0.25f, speed * slice));
             if (distance > 0.0001f)
             {
                 transform.localPosition += direction / distance * step;
                 Vector3 flat = new Vector3(direction.x, 0f, direction.z);
                 if (flat.sqrMagnitude > 0.0001f) transform.localRotation = Quaternion.LookRotation(flat, Vector3.up);
             }
-            remaining -= step;
+            float consumedTime = step / speed;
+            remainingTime -= consumedTime;
+            moved += step;
+            if (sprinting) stamina = Math.Max(0.0, stamina - consumedTime * FuchuWalkController.SprintStaminaPerSecond);
             RecordTrail();
             if (distance <= step + 0.0001f)
             {
-                if (roaming)
+                if (returningToRoute)
                 {
-                    int current = route[target];
-                    int previous = route[1 - target];
-                    List<int> neighbors = graph[current].Neighbors;
-                    int next = neighbors[UnityEngine.Random.Range(0, neighbors.Count)];
-                    if (neighbors.Count > 1 && next == previous)
-                        next = neighbors[(neighbors.IndexOf(next) + 1) % neighbors.Count];
-                    route[1 - target] = next;
-                    target = 1 - target;
+                    returningToRoute = false;
+                    nextItemScan = Time.time + 0.5f;
                 }
-                else
+                else if (detour)
                 {
-                    // Node zero is reached only after physically walking the entire closed route.
-                    if (target == 0) CompleteLoop();
-                    target = (target + 1) % route.Count;
+                    if (player.RecoveryItems.TryCollectNpcItem(targetItem, transform.position, out double fraction))
+                        stamina = Math.Min(MaxStamina, stamina + MaxStamina * fraction);
+                    targetItem = -1;
+                    returningToRoute = true;
                 }
+                else AdvanceRoute();
+                if (planning) break;
             }
         }
-        phase += 4.5f * Time.deltaTime * 3f;
+        phase += moved * 3f;
         visual.transform.localPosition = Vector3.up * Mathf.Abs(Mathf.Sin(phase)) * 0.025f;
     }
 

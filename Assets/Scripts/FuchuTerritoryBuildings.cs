@@ -108,10 +108,22 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
         StaminaCapacityPoints = 0.0;
         movementBuildingPoints = 0.0;
         toughnessBuildingPoints = 0.0;
+        foreach (FuchuBattleMatch.Participant participant in match.Players)
+        {
+            participant.MovementPoints = 0.0;
+            participant.StaminaCapacityPoints = 0.0;
+        }
         foreach (var entry in knownBuildings)
         {
             var building = entry.Value;
-            if (match.BuildingOwner(entry.Key, building.Min, building.Max) != 0) continue;
+            int owner = match.BuildingOwner(entry.Key, building.Min, building.Max);
+            if (owner < 0) continue;
+            FuchuBuildingEffects.EffectKind effect = effects.GetEffect(entry.Key);
+            if (effect == FuchuBuildingEffects.EffectKind.Movement)
+                match.Players[owner].MovementPoints += building.Points / 10.0;
+            else if (effect == FuchuBuildingEffects.EffectKind.StaminaCapacity)
+                match.Players[owner].StaminaCapacityPoints += building.Points;
+            if (owner != 0) continue;
             TotalPoints += building.Points;
             switch (effects.GetEffect(entry.Key))
             {
