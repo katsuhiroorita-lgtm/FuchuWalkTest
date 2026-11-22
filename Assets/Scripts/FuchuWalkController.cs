@@ -64,28 +64,70 @@ public sealed class FuchuWalkController : MonoBehaviour
     private float? timeScaleBeforeMenu;
     private bool runStarted;
     private static bool startAfterReload;
+    internal bool OnlineSprintRequested { get; private set; }
+    internal uint OnlineCorrectionVersion { get; private set; }
+    private Vector3 onlineStartingPosition;
+    private Quaternion onlineStartingRotation;
+    internal void ShowOnlineResults()
+    {
+        MenuOpen = true; OnlineSprintRequested = false; sprintBonus = 0;
+        Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
+    }
+    private double unsentOnlineStaminaCost;
+    private readonly Queue<(uint Sequence, double Cost)> onlineStaminaCosts = new Queue<(uint, double)>();
+
+    internal void RegisterOnlinePoseSent(uint sequence)
+    {
+        onlineStaminaCosts.Enqueue((sequence, unsentOnlineStaminaCost));
+        unsentOnlineStaminaCost = 0.0;
+        while (onlineStaminaCosts.Count > 128) onlineStaminaCosts.Dequeue();
+    }
+    internal void ApplyOnlineGrowth(FuchuOnlineTerritoryState.Participant growth)
+    {
+        if (growth.CorrectionVersion != OnlineCorrectionVersion)
+        {
+            OnlineCorrectionVersion = growth.CorrectionVersion;
+            onlineStaminaCosts.Clear(); unsentOnlineStaminaCost = 0;
+            characterController.enabled = false;
+            transform.localPosition = growth.CorrectionPosition;
+            characterController.enabled = true;
+            verticalSpeed = sprintBonus = 0;
+            Online.ResetWalkingTrail();
+            UpdateCamera();
+        }
+        while (onlineStaminaCosts.Count > 0 && onlineStaminaCosts.Peek().Sequence <= growth.AcknowledgedPose)
+            onlineStaminaCosts.Dequeue();
+        double debt = unsentOnlineStaminaCost;
+        foreach (var pending in onlineStaminaCosts) debt += pending.Cost;
+        Stamina = System.Math.Max(0.0, System.Math.Min(growth.MaxStamina, growth.Stamina - debt));
+        sprintBonus = Mathf.Min(sprintBonus, growth.SpeedLevel - 1);
+    }
 
     public double Stamina { get; private set; } = BaseStamina;
-    public double StaminaCapacityPoints => territory != null ? territory.StaminaCapacityPoints : 0.0;
+    public double StaminaCapacityPoints => IsOnlineExploration ? Online.LocalGrowth?.StaminaCapacityPoints ?? 0.0 : territory != null ? territory.StaminaCapacityPoints : 0.0;
     public double MaxStamina => BaseStamina + StaminaCapacityPoints;
-    public double BuildingPoints => territory != null ? territory.BuildingPoints : 0.0;
-    public double MovementPoints => territory != null ? territory.MovementPoints : 0.0;
+    public double BuildingPoints => IsOnlineExploration ? Online.LocalGrowth?.BuildingPoints ?? 0.0 : territory != null ? territory.BuildingPoints : 0.0;
+    public double MovementPoints => IsOnlineExploration ? Online.LocalGrowth?.MovementPoints ?? 0.0 : territory != null ? territory.MovementPoints : 0.0;
     public int SpeedLevel => 1 + (int)System.Math.Min(MaximumSprintBonus, System.Math.Floor(MovementPoints / PointsPerSprintBonus));
-    public double ToughnessPoints => territory != null ? territory.ToughnessPoints : 0.0;
+    public double ToughnessPoints => IsOnlineExploration ? Online.LocalGrowth?.ToughnessPoints ?? 0.0 : territory != null ? territory.ToughnessPoints : 0.0;
+    internal FuchuOnlineConnection Online { get; private set; }
+    internal bool IsOnlineExploration => Online != null && Online.Exploring;
+    private readonly List<(Behaviour Component, bool Enabled)> offlineBehaviours = new List<(Behaviour, bool)>();
+    private readonly List<(GameObject Object, bool Active)> offlineObjects = new List<(GameObject, bool)>();
     internal FuchuBattleMatch Battle { get; private set; }
     internal FuchuBuildingEffects BuildingEffects { get; private set; }
     public int ToughnessLevel => 1 + (int)System.Math.Min(5.0, System.Math.Floor(ToughnessPoints / 500.0));
     internal FuchuStaminaItems RecoveryItems { get; private set; }
     internal float WalkingSpeed => walkSpeed;
     internal float BaseSprintSpeed => sprintSpeed;
-    public double TerritoryCoverage => territory != null ? territory.Coverage : 0.0;
+    public double TerritoryCoverage => IsOnlineExploration ? Online.LocalCoverage : territory != null ? territory.Coverage : 0.0;
     internal bool RunFinished { get; private set; }
     internal bool IsPlaying => runStarted && !RunFinished;
     internal bool MenuOpen { get; private set; }
     internal bool ReloadPending { get; private set; }
     internal int RunRank { get; private set; }
     internal IReadOnlyList<FuchuRunRanking.Entry> Ranking { get; private set; }
-    internal double RemainingRunSeconds => !runStarted || RunFinished ? 0.0 :
+    internal double RemainingRunSeconds => IsOnlineExploration ? Online.RemainingSeconds : !runStarted || RunFinished ? 0.0 :
         System.Math.Max(0.0, runDeadline - Time.realtimeSinceStartupAsDouble);
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
@@ -119,6 +161,8 @@ public sealed class FuchuWalkController : MonoBehaviour
         RecoveryItems = recoveryItems.AddComponent<FuchuStaminaItems>();
         RecoveryItems.Initialize(this, characterController);
         UpdateCamera();
+        Online = gameObject.AddComponent<FuchuOnlineConnection>();
+        Online.Initialize(this, playerRenderer);
         bool startImmediately = startAfterReload;
         startAfterReload = false;
         if (startImmediately || walkHud == null || !walkHud.isActiveAndEnabled)
@@ -129,11 +173,102 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     internal void BeginRun()
     {
-        if (runStarted) return;
+        if (runStarted || (Online != null && Online.IsBusy)) return;
         runStarted = true;
         ResumeFromMenu();
         runDeadline = Time.realtimeSinceStartupAsDouble + RunDurationSeconds;
         LockCursor();
+    }
+
+    internal void EnterOnlineExploration()
+    {
+        // Online state is separate from the offline match and its local ranking.
+        onlineStartingPosition = transform.localPosition;
+        onlineStartingRotation = transform.localRotation;
+        offlineBehaviours.Clear();
+        offlineObjects.Clear();
+        Disable(territory);
+        foreach (FuchuTrafficSpawner traffic in FindObjectsByType<FuchuTrafficSpawner>(FindObjectsSortMode.None)) Disable(traffic);
+        foreach (FuchuResidentSpawner resident in FindObjectsByType<FuchuResidentSpawner>(FindObjectsSortMode.None)) Disable(resident);
+        foreach (FuchuBattleMatch.Participant participant in Battle.Players)
+            if (participant.Id != 0 && participant.Character != null) Hide(participant.Character.gameObject);
+        if (RecoveryItems != null) Hide(RecoveryItems.gameObject);
+        ResumeFromMenu();
+        runStarted = true;
+        RunFinished = false;
+        MenuOpen = true;
+        Stamina = BaseStamina;
+        onlineStaminaCosts.Clear(); unsentOnlineStaminaCost = 0.0; OnlineSprintRequested = false; OnlineCorrectionVersion = 0;
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+
+        void Disable(Behaviour component)
+        {
+            if (component == null) return;
+            offlineBehaviours.Add((component, component.enabled));
+            component.enabled = false;
+        }
+        void Hide(GameObject obj)
+        {
+            offlineObjects.Add((obj, obj.activeSelf));
+            obj.SetActive(false);
+        }
+    }
+
+    internal void ExitOnlineExploration()
+    {
+        runStarted = false;
+        MenuOpen = false;
+        RunFinished = false;
+        sprintBonus = verticalSpeed = 0f;
+        Stamina = BaseStamina;
+        onlineStaminaCosts.Clear(); unsentOnlineStaminaCost = 0.0; OnlineSprintRequested = false; OnlineCorrectionVersion = 0;
+        foreach (var entry in offlineBehaviours)
+            if (entry.Component != null) entry.Component.enabled = entry.Enabled;
+        foreach (var entry in offlineObjects)
+            if (entry.Object != null) entry.Object.SetActive(entry.Active);
+        offlineBehaviours.Clear();
+        offlineObjects.Clear();
+        characterController.enabled = false;
+        transform.SetLocalPositionAndRotation(startingPosition, startingRotation);
+        characterController.enabled = true;
+        cameraPitch = DefaultCameraPitch;
+        UpdateCamera();
+        PauseForMenu();
+    }
+
+    internal void PlaceOnlineNear(Vector3 hostPosition, float yaw)
+    {
+        if (!IsOnlineExploration) return;
+        Vector3 candidate = hostPosition + Quaternion.Euler(0f, yaw, 0f) * Vector3.right * 2f;
+        Transform root = transform.parent;
+        Transform road = root != null ? root.Find("FuchuLocalRoads_1000m") : null;
+        characterController.enabled = false;
+        Vector3 target = root != null ? root.TransformPoint(hostPosition) : hostPosition;
+        if (road != null && road.TryGetComponent(out Collider surface))
+        {
+            Vector3 point = root.TransformPoint(candidate);
+            if (surface.Raycast(new Ray(point + transform.up * 20f, -transform.up), out RaycastHit hit, 40f))
+            {
+                Vector3 feet = hit.point + transform.up * (characterController.skinWidth + 0.02f);
+                float radius = characterController.radius;
+                if (!Physics.CheckCapsule(feet + transform.up * radius,
+                    feet + transform.up * (characterController.height - radius), radius,
+                    Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                {
+                    Vector3 footOffset = transform.TransformVector(characterController.center - Vector3.up * characterController.height * 0.5f);
+                    target = feet - footOffset;
+                }
+            }
+        }
+        transform.position = target;
+        transform.localRotation = Quaternion.Euler(0f, yaw, 0f);
+        onlineStartingPosition = transform.localPosition;
+        onlineStartingRotation = transform.localRotation;
+        characterController.enabled = true;
+        verticalSpeed = 0f;
+        Online.ResetWalkingTrail();
+        UpdateCamera();
     }
 
     private void ChooseStartingPosition()
@@ -181,7 +316,7 @@ public sealed class FuchuWalkController : MonoBehaviour
     private void Update()
     {
         if (!IsPlaying) return;
-        if (RemainingRunSeconds <= 0.0)
+        if (!IsOnlineExploration && RemainingRunSeconds <= 0.0)
         {
             FinishRun();
             return;
@@ -199,11 +334,15 @@ public sealed class FuchuWalkController : MonoBehaviour
             {
                 MenuOpen = true;
                 sprintBonus = 0f;
+                OnlineSprintRequested = false;
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
             }
             return;
         }
+
+        if (IsOnlineExploration && !Online.MatchPlaying)
+        { OnlineSprintRequested = false; return; }
 
         if (!MenuOpen && keyboard.f5Key.wasPressedThisFrame)
         {
@@ -232,8 +371,8 @@ public sealed class FuchuWalkController : MonoBehaviour
         if (!MenuOpen && keyboard.aKey.isPressed) input.x -= 1f;
         input = Vector2.ClampMagnitude(input, 1f);
 
-        bool sprinting = Stamina > 0.0 && input != Vector2.zero &&
-            (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed);
+        OnlineSprintRequested = input != Vector2.zero && (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed);
+        bool sprinting = Stamina > 0.0 && OnlineSprintRequested;
         if (sprinting)
         {
             float targetBonus = SpeedLevel - 1;
@@ -244,7 +383,7 @@ public sealed class FuchuWalkController : MonoBehaviour
             sprintBonus = 0f;
         }
         float speed = sprinting ? sprintSpeed + sprintBonus : walkSpeed;
-        if (Time.time < slowedUntil) speed *= 0.5f;
+        if (IsOnlineExploration ? Online.LocalSlowed : Time.time < slowedUntil) speed *= 0.5f;
         Vector3 horizontalMove = (transform.right * input.x + transform.forward * input.y) * speed;
 
         if (characterController.isGrounded)
@@ -263,8 +402,12 @@ public sealed class FuchuWalkController : MonoBehaviour
 
         float groundSpeed = Vector3.ProjectOnPlane(characterController.velocity, transform.up).magnitude;
         if (sprinting && groundSpeed > 0.05f)
-            Stamina = System.Math.Max(0.0, Stamina - SprintStaminaPerSecond * Time.deltaTime);
-        if (groundSpeed > 0.05f) territory.RecordGroundStep(transform.position);
+        {
+            double spent = System.Math.Min(Stamina, SprintStaminaPerSecond * Time.deltaTime);
+            Stamina -= spent;
+            if (IsOnlineExploration) unsentOnlineStaminaCost += spent;
+        }
+        if (!IsOnlineExploration && groundSpeed > 0.05f) territory.RecordGroundStep(transform.position);
         SyncOwnedGrowth();
         if (characterController.isGrounded && groundSpeed > 0.05f)
         {
@@ -337,7 +480,7 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     internal void ContinueRun()
     {
-        if (!MenuOpen || ReloadPending || RunFinished) return;
+        if (!MenuOpen || ReloadPending || RunFinished || IsOnlineExploration && !Online.TerritoryReady) return;
         MenuOpen = false;
         walkHud?.CloseGameplayMenu();
         if (walkHud == null || !walkHud.TimeMenuVisible) LockCursor();
@@ -345,7 +488,7 @@ public sealed class FuchuWalkController : MonoBehaviour
 
     internal void ReloadRun(bool startImmediately)
     {
-        if ((!RunFinished && !MenuOpen) || ReloadPending) return;
+        if (IsOnlineExploration || (!RunFinished && !MenuOpen) || ReloadPending) return;
         int sceneIndex = gameObject.scene.buildIndex;
         if (sceneIndex < 0)
         {
@@ -410,12 +553,14 @@ public sealed class FuchuWalkController : MonoBehaviour
         if (territory != null) territory.ClearOpenTrail();
         sprintBonus = 0f;
         characterController.enabled = false;
-        transform.SetLocalPositionAndRotation(startingPosition, startingRotation);
+        transform.SetLocalPositionAndRotation(IsOnlineExploration ? onlineStartingPosition : startingPosition,
+            IsOnlineExploration ? onlineStartingRotation : startingRotation);
         cameraPitch = DefaultCameraPitch;
         stepPhase = 0f;
         playerMesh.transform.localPosition = Vector3.up * playerFootHeight;
         verticalSpeed = 0f;
         characterController.enabled = true;
+        if (IsOnlineExploration) Online.ResetWalkingTrail();
         UpdateCamera();
     }
 

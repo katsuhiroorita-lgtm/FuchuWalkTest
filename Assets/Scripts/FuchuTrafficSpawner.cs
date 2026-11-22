@@ -35,6 +35,12 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
         new Color(0.74f, 0.56f, 0.18f), new Color(0.20f, 0.43f, 0.30f)
     };
 
+    internal void CollectOnlineActors(List<FuchuOnlineMatch.Actor> output)
+    {
+        foreach (CarState car in cars)
+            output.Add(new FuchuOnlineMatch.Actor(car.Root, car.Visual, (byte)car.Type, VehicleSize(car.Type)));
+    }
+
     private void Start()
     {
         if (worldRoot == null || roadMeshFilter == null || roadMeshFilter.sharedMesh == null)
@@ -53,12 +59,15 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
         searchParents = new int[nodes.Length];
         searchMarks = new int[nodes.Length];
         searchQueue = new int[nodes.Length];
-        Material glassMaterial = CreateMaterial("TrafficGlass", new Color(0.20f, 0.36f, 0.42f), 0.1f);
-        Material tireMaterial = CreateMaterial("TrafficTires", new Color(0.055f, 0.06f, 0.065f), 0.05f);
-        Material lampMaterial = CreateMaterial("TrafficLamps", new Color(0.95f, 0.78f, 0.48f), 0.05f);
+        Material glassMaterial = null, tireMaterial = null, lampMaterial = null;
         var paintMaterials = new Material[PaintColors.Length];
-        for (int i = 0; i < PaintColors.Length; i++)
-            paintMaterials[i] = CreateMaterial("CarPaint_" + i, PaintColors[i], 0.2f);
+        if (!FuchuLocalServer.Active)
+        {
+            glassMaterial = CreateMaterial("TrafficGlass", new Color(0.20f, 0.36f, 0.42f), 0.1f);
+            tireMaterial = CreateMaterial("TrafficTires", new Color(0.055f, 0.06f, 0.065f), 0.05f);
+            lampMaterial = CreateMaterial("TrafficLamps", new Color(0.95f, 0.78f, 0.48f), 0.05f);
+            for (int i = 0; i < PaintColors.Length; i++) paintMaterials[i] = CreateMaterial("CarPaint_" + i, PaintColors[i], 0.2f);
+        }
 
         var choices = new List<int>();
         for (int i = 0; i < nodes.Length; i++)
@@ -100,7 +109,7 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
             visual.SetParent(car.transform, false);
             VehicleType type = i < carCount ? VehicleType.Regular : i < carCount + mediumCarCount ? VehicleType.Medium : VehicleType.Large;
             car.name = $"TrafficCar_{type}_{i + 1:00}";
-            BuildCarModel(visual, paintMaterials[i % paintMaterials.Length], glassMaterial, tireMaterial, lampMaterial, type);
+            if (!FuchuLocalServer.Active) BuildCarModel(visual, paintMaterials[i % paintMaterials.Length], glassMaterial, tireMaterial, lampMaterial, type);
             cars.Add(new CarState(car.transform, visual, current, destination, route,
                 minimumSpeed + (float)random.NextDouble() * Mathf.Max(0f, maximumSpeed - minimumSpeed), type));
         }
@@ -112,6 +121,7 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
         if (nodes == null || dt <= 0f) return;
         foreach (CarState car in cars)
         {
+            if (!car.Root.gameObject.activeSelf) continue;
             Vector3 position = car.Root.localPosition;
             Vector3 target = nodes[car.TargetNode].Center;
             Vector3 direction = target - position;
@@ -142,7 +152,7 @@ public sealed class FuchuTrafficSpawner : MonoBehaviour
             car.Root.localPosition = position;
             car.Visual.localRotation = Quaternion.LookRotation(direction, Vector3.up);
         }
-        DetectPlayerCollision();
+        if (!FuchuLocalServer.Active && (playerController == null || !playerController.IsOnlineExploration)) DetectPlayerCollision();
     }
 
     private void DetectPlayerCollision()

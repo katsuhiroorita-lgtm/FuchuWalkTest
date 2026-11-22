@@ -1,0 +1,11 @@
+/var/log/fuchu/server.log {
+    daily
+    maxsize 10M
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su fuchu fuchu
+}

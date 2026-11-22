@@ -1,0 +1,727 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "REVIEW ONLY: creating this test stack incurs EC2, EBS, public IPv4 and possible transfer charges. Obtain explicit owner approval first. No game artifact is auto-downloaded.",
+  "Parameters": {
+    "KeyName": {
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Description": "Existing SSH key pair. Private key stays on your PC."
+    },
+    "AdminCidr": {
+      "Type": "String",
+      "AllowedPattern": "((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/32",
+      "Description": "Administrator public IPv4 /32 for SSH."
+    },
+    "PlayerCidr1": {
+      "Type": "String",
+      "AllowedPattern": "((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/32",
+      "Description": "First player public IPv4 /32 for UDP 7777."
+    },
+    "InstanceType": {
+      "Type": "String",
+      "Default": "c7i-flex.large",
+      "AllowedValues": [
+        "c7i-flex.large"
+      ],
+      "Description": "Free Plan eligible x86_64 test instance: 2 vCPU, 4 GiB."
+    },
+    "UbuntuImage": {
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      "Default": "/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id"
+    },
+    "AutoStopMinutes": {
+      "Type": "Number",
+      "Default": 120,
+      "AllowedValues": [
+        30,
+        60,
+        120
+      ],
+      "Description": "OS shutdown after boot. EBS storage remains billable after stop."
+    },
+    "PlayerCidr2": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "(|((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/32)",
+      "Description": "Optional additional player public IPv4 /32."
+    },
+    "PlayerCidr3": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "(|((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/32)",
+      "Description": "Optional additional player public IPv4 /32."
+    },
+    "PlayerCidr4": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "(|((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/32)",
+      "Description": "Optional additional player public IPv4 /32."
+    },
+    "PlayerCidr5": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "(|((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])/32)",
+      "Description": "Optional additional player public IPv4 /32."
+    }
+  },
+  "Conditions": {
+    "HasPlayer2": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "PlayerCidr2"
+            },
+            ""
+          ]
+        }
+      ]
+    },
+    "HasPlayer3": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "PlayerCidr3"
+            },
+            ""
+          ]
+        }
+      ]
+    },
+    "HasPlayer4": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "PlayerCidr4"
+            },
+            ""
+          ]
+        }
+      ]
+    },
+    "HasPlayer5": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "PlayerCidr5"
+            },
+            ""
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "Vpc": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "10.42.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-vpc"
+            }
+          },
+          {
+            "Key": "Project",
+            "Value": "FuchuWalkTest"
+          }
+        ]
+      }
+    },
+    "InternetGateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-igw"
+            }
+          },
+          {
+            "Key": "Project",
+            "Value": "FuchuWalkTest"
+          }
+        ]
+      }
+    },
+    "AttachGateway": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "InternetGatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "Subnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "CidrBlock": "10.42.1.0/24",
+        "MapPublicIpOnLaunch": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-public-subnet"
+            }
+          },
+          {
+            "Key": "Project",
+            "Value": "FuchuWalkTest"
+          }
+        ]
+      }
+    },
+    "RouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-routes"
+            }
+          },
+          {
+            "Key": "Project",
+            "Value": "FuchuWalkTest"
+          }
+        ]
+      }
+    },
+    "InternetRoute": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "RouteTable"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "InternetGateway"
+        }
+      },
+      "DependsOn": "AttachGateway"
+    },
+    "RouteAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "RouteTable"
+        },
+        "SubnetId": {
+          "Ref": "Subnet"
+        }
+      }
+    },
+    "ServerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "GroupDescription": "Fuchu limited test: SSH admin /32 and UDP 7777 player /32 only",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 22,
+            "ToPort": 22,
+            "CidrIp": {
+              "Ref": "AdminCidr"
+            }
+          },
+          {
+            "IpProtocol": "udp",
+            "FromPort": 7777,
+            "ToPort": 7777,
+            "CidrIp": {
+              "Ref": "PlayerCidr1"
+            }
+          },
+          {
+            "Fn::If": [
+              "HasPlayer2",
+              {
+                "IpProtocol": "udp",
+                "FromPort": 7777,
+                "ToPort": 7777,
+                "CidrIp": {
+                  "Ref": "PlayerCidr2"
+                }
+              },
+              {
+                "Ref": "AWS::NoValue"
+              }
+            ]
+          },
+          {
+            "Fn::If": [
+              "HasPlayer3",
+              {
+                "IpProtocol": "udp",
+                "FromPort": 7777,
+                "ToPort": 7777,
+                "CidrIp": {
+                  "Ref": "PlayerCidr3"
+                }
+              },
+              {
+                "Ref": "AWS::NoValue"
+              }
+            ]
+          },
+          {
+            "Fn::If": [
+              "HasPlayer4",
+              {
+                "IpProtocol": "udp",
+                "FromPort": 7777,
+                "ToPort": 7777,
+                "CidrIp": {
+                  "Ref": "PlayerCidr4"
+                }
+              },
+              {
+                "Ref": "AWS::NoValue"
+              }
+            ]
+          },
+          {
+            "Fn::If": [
+              "HasPlayer5",
+              {
+                "IpProtocol": "udp",
+                "FromPort": 7777,
+                "ToPort": 7777,
+                "CidrIp": {
+                  "Ref": "PlayerCidr5"
+                }
+              },
+              {
+                "Ref": "AWS::NoValue"
+              }
+            ]
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-server-sg"
+            }
+          },
+          {
+            "Key": "Project",
+            "Value": "FuchuWalkTest"
+          }
+        ]
+      }
+    },
+    "Server": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "ImageId": {
+          "Ref": "UbuntuImage"
+        },
+        "InstanceType": {
+          "Ref": "InstanceType"
+        },
+        "KeyName": {
+          "Ref": "KeyName"
+        },
+        "InstanceInitiatedShutdownBehavior": "stop",
+        "MetadataOptions": {
+          "HttpTokens": "required",
+          "HttpEndpoint": "enabled"
+        },
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/sda1",
+            "Ebs": {
+              "VolumeType": "gp3",
+              "VolumeSize": 20,
+              "Encrypted": true,
+              "DeleteOnTermination": true
+            }
+          }
+        ],
+        "NetworkInterfaces": [
+          {
+            "DeviceIndex": "0",
+            "SubnetId": {
+              "Ref": "Subnet"
+            },
+            "AssociatePublicIpAddress": true,
+            "GroupSet": [
+              {
+                "Ref": "ServerSecurityGroup"
+              }
+            ]
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Sub": "#!/usr/bin/env bash\nset -euo pipefail\nexport DEBIAN_FRONTEND=noninteractive\n# Enable the stop timer before package installation, so a later setup failure does not leave an idle VM running.\ncat >/etc/systemd/system/fuchu-host-stop.service <<'UNIT'\n[Unit]\nDescription=Stop Fuchu test EC2 instance\n[Service]\nType=oneshot\nExecStart=/usr/sbin/shutdown -h now\nUNIT\ncat >/etc/systemd/system/fuchu-host-stop.timer <<'UNIT'\n[Unit]\nDescription=Time limit for this Fuchu test EC2 boot\n[Timer]\nOnBootSec=${AutoStopMinutes}min\nUnit=fuchu-host-stop.service\n[Install]\nWantedBy=timers.target\nUNIT\nsystemctl daemon-reload\nsystemctl enable --now fuchu-host-stop.timer\napt-get -o Acquire::Retries=3 update\napt-get -o Acquire::Retries=3 install -y ca-certificates libstdc++6 libgcc-s1 libc6 libx11-6 libxcursor1 libxrandr2 libxinerama1 libxi6 libglib2.0-0 libnss3 libasound2 libpulse0 libatomic1 libgtk-3-0 logrotate\nif ! id fuchu >/dev/null 2>&1; then useradd --system --home-dir /var/lib/fuchu --create-home --shell /usr/sbin/nologin fuchu; fi\ninstall -d -m 0755 /opt/fuchu /opt/fuchu/releases /etc/fuchu\ninstall -d -o fuchu -g fuchu -m 0750 /var/lib/fuchu /var/log/fuchu\nprintf 'Bootstrap completed. Upload the approved Linux bundle and install it manually.\\n' >/var/log/fuchu-bootstrap-ready\n"
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-server"
+            }
+          },
+          {
+            "Key": "Project",
+            "Value": "FuchuWalkTest"
+          }
+        ]
+      },
+      "DependsOn": [
+        "InternetRoute",
+        "RouteAssociation"
+      ]
+    }
+  },
+  "Outputs": {
+    "InstanceId": {
+      "Value": {
+        "Ref": "Server"
+      }
+    },
+    "PublicIPv4": {
+      "Value": {
+        "Fn::GetAtt": [
+          "Server",
+          "PublicIp"
+        ]
+      }
+    },
+    "GameEndpoint": {
+      "Value": {
+        "Fn::Sub": "${Server.PublicIp}:7777"
+      }
+    },
+    "SshUser": {
+      "Value": "ubuntu"
+    },
+    "SecurityGroupId": {
+      "Value": {
+        "Ref": "ServerSecurityGroup"
+      }
+    },
+    "Reminder": {
+      "Value": "Stop is not deletion: EBS storage remains billable. Auto-stop is not a monetary spending cap."
+    }
+  },
+  "Rules": {
+    "DistinctPlayerAddresses": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "PlayerCidr2"
+                  },
+                  ""
+                ]
+              },
+              {
+                "Fn::Not": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "PlayerCidr2"
+                      },
+                      {
+                        "Ref": "PlayerCidr1"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Player CIDRs must be distinct, or optional entries must be empty. People behind the same public IP only need one entry."
+        },
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "PlayerCidr3"
+                  },
+                  ""
+                ]
+              },
+              {
+                "Fn::Not": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "PlayerCidr3"
+                      },
+                      {
+                        "Ref": "PlayerCidr1"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Player CIDRs must be distinct, or optional entries must be empty. People behind the same public IP only need one entry."
+        },
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "PlayerCidr3"
+                  },
+                  ""
+                ]
+              },
+              {
+                "Fn::Not": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "PlayerCidr3"
+                      },
+                      {
+                        "Ref": "PlayerCidr2"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Player CIDRs must be distinct, or optional entries must be empty. People behind the same public IP only need one entry."
+        },
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "PlayerCidr4"
+                  },
+                  ""
+                ]
+              },
+              {
+                "Fn::Not": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "PlayerCidr4"
+                      },
+                      {
+                        "Ref": "PlayerCidr1"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Player CIDRs must be distinct, or optional entries must be empty. People behind the same public IP only need one entry."
+        },
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "PlayerCidr4"
+                  },
+                  ""
+                ]
+              },
+              {
+                "Fn::Not": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "PlayerCidr4"
+                      },
+                      {
+                        "Ref": "PlayerCidr2"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Player CIDRs must be distinct, or optional entries must be empty. People behind the same public IP only need one entry."
+        },
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "PlayerCidr4"
+                  },
+                  ""
+                ]
+              },
+              {
+                "Fn::Not": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "PlayerCidr4"
+                      },
+                      {
+                        "Ref": "PlayerCidr3"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Player CIDRs must be distinct, or optional entries must be empty. People behind the same public IP only need one entry."
+        },
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "PlayerCidr5"
+                  },
+                  ""
+                ]
+              },
+              {
+                "Fn::Not": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "PlayerCidr5"
+                      },
+                      {
+                        "Ref": "PlayerCidr1"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Player CIDRs must be distinct, or optional entries must be empty. People behind the same public IP only need one entry."
+        },
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "PlayerCidr5"
+                  },
+                  ""
+                ]
+              },
+              {
+                "Fn::Not": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "PlayerCidr5"
+                      },
+                      {
+                        "Ref": "PlayerCidr2"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Player CIDRs must be distinct, or optional entries must be empty. People behind the same public IP only need one entry."
+        },
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "PlayerCidr5"
+                  },
+                  ""
+                ]
+              },
+              {
+                "Fn::Not": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "PlayerCidr5"
+                      },
+                      {
+                        "Ref": "PlayerCidr3"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Player CIDRs must be distinct, or optional entries must be empty. People behind the same public IP only need one entry."
+        },
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "PlayerCidr5"
+                  },
+                  ""
+                ]
+              },
+              {
+                "Fn::Not": [
+                  {
+                    "Fn::Equals": [
+                      {
+                        "Ref": "PlayerCidr5"
+                      },
+                      {
+                        "Ref": "PlayerCidr4"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Player CIDRs must be distinct, or optional entries must be empty. People behind the same public IP only need one entry."
+        }
+      ]
+    }
+  }
+}

@@ -8,6 +8,28 @@ using Unity.Profiling;
 public sealed class FuchuBattleNpc : MonoBehaviour
 {
     private FuchuWalkController player;
+    private FuchuOnlineSimulation simulation;
+    private bool Finished => onlineState != null ? onlineState.MatchFinished : player == null || player.RunFinished;
+    private float BaseSprintSpeed => simulation != null ? simulation.SprintSpeed : player.BaseSprintSpeed;
+    private float WalkSpeed => simulation != null ? simulation.WalkingSpeed : player.WalkingSpeed;
+    private double ServerTime => simulation != null ? simulation.ServerTime : player.Online.ServerTime;
+    internal void InitializeOnline(FuchuOnlineSimulation context, FuchuBattleMatch.Participant owner,
+        FuchuOnlineTerritoryState state, List<Vector3> starts)
+    {
+        simulation = context;
+        Initialize(context.Player, owner, context.Graph, context.Loops, starts, state);
+    }
+    private FuchuOnlineTerritoryState onlineState;
+    private uint correctionVersion;
+    private List<int> initialOnlineRoute, initialOnlineLoop;
+    private bool initialOnlineRoaming;
+    private FuchuOnlineTerritoryState.Participant OnlineOwner => onlineState?.Players[participant.Id];
+    private FuchuTerritoryShape Shape => onlineState != null ? OnlineOwner.Shape : participant.Territory.Shape;
+    private void ClearTrail()
+    {
+        if (onlineState != null) onlineState.ClearTrail(participant.Id);
+        else participant.Territory.ClearOpenTrail();
+    }
     private FuchuBattleMatch.Participant participant;
     private FuchuResidentSpawner.TriangleNode[] graph;
     private List<int> route;
@@ -42,13 +64,14 @@ public sealed class FuchuBattleNpc : MonoBehaviour
     private bool returningToRoute;
     private Collider roadCollider;
     private Predicate<Vector3> reachableItem;
-    private double MaxStamina => FuchuWalkController.BaseStamina + participant.StaminaCapacityPoints;
-    private int SpeedLevel => 1 + (int)Math.Min(FuchuWalkController.MaximumSprintBonus, Math.Floor(participant.MovementPoints / FuchuWalkController.PointsPerSprintBonus));
+    private double MaxStamina => onlineState != null ? OnlineOwner.MaxStamina : FuchuWalkController.BaseStamina + participant.StaminaCapacityPoints;
+    private int SpeedLevel => 1 + (int)Math.Min(FuchuWalkController.MaximumSprintBonus, Math.Floor((onlineState != null ? OnlineOwner.MovementPoints : participant.MovementPoints) / FuchuWalkController.PointsPerSprintBonus));
 
     internal void Initialize(FuchuWalkController controller, FuchuBattleMatch.Participant owner,
-        FuchuResidentSpawner.TriangleNode[] nodes, List<List<int>> loops, List<Vector3> starts)
+        FuchuResidentSpawner.TriangleNode[] nodes, List<List<int>> loops, List<Vector3> starts, FuchuOnlineTerritoryState authority = null)
     {
         player = controller;
+        onlineState = authority;
         participant = owner;
         graph = nodes;
         availableLoops = loops;
@@ -63,7 +86,7 @@ public sealed class FuchuBattleNpc : MonoBehaviour
         if (road != null) roadCollider = road.GetComponent<Collider>();
         // Prefer separate nearby blocks, so the first local match can be observed without crossing the city.
         float best = float.PositiveInfinity;
-        Vector3 local = controller.transform.localPosition;
+        Vector3 local = simulation != null ? simulation.Spawn : controller.transform.localPosition;
         foreach (List<int> loop in loops)
         {
             Vector3 start = nodes[loop[0]].Center;
@@ -75,12 +98,15 @@ public sealed class FuchuBattleNpc : MonoBehaviour
             route = new List<int>(loop);
             currentLoop = loop;
         }
-        var obj = new GameObject("Player Visual", typeof(MeshFilter), typeof(MeshRenderer));
-        obj.transform.SetParent(transform, false);
-        visual = obj.GetComponent<MeshFilter>();
-        visualRenderer = obj.GetComponent<MeshRenderer>();
-        FuchuResidentSpawner.BuildPlayerVisual(visual, visualRenderer);
-        FuchuBattleMatch.Tint(visualRenderer, owner.Color);
+        if (simulation == null || !simulation.Dedicated)
+        {
+            var obj = new GameObject("Player Visual", typeof(MeshFilter), typeof(MeshRenderer));
+            obj.transform.SetParent(transform, false);
+            visual = obj.GetComponent<MeshFilter>();
+            visualRenderer = obj.GetComponent<MeshRenderer>();
+            FuchuResidentSpawner.BuildPlayerVisual(visual, visualRenderer);
+            FuchuBattleMatch.Tint(visualRenderer, owner.Color);
+        }
         if (route == null || route.Count < 3)
         {
             int nearest = -1;
@@ -108,6 +134,10 @@ public sealed class FuchuBattleNpc : MonoBehaviour
         if (UnityEngine.Random.value < 0.5f) route.Reverse();
         transform.localPosition = nodes[route[0]].Center + Vector3.up * 0.03f;
         target = 1;
+        if (onlineState != null)
+        {
+            initialOnlineRoute = new List<int>(route); initialOnlineLoop = currentLoop; initialOnlineRoaming = roaming;
+        }
         if (!roaming)
             foreach (int node in route)
             {
@@ -121,8 +151,13 @@ public sealed class FuchuBattleNpc : MonoBehaviour
         using (TrailMarker.Auto())
         {
             // A known route is tested once at its end, never against every earlier sample.
+            if (onlineState != null)
+            {
+                onlineState.Record(participant.Id, new Vector2(transform.localPosition.x, transform.localPosition.z), evaluateClaims: roaming);
+                return;
+            }
             if (roaming && participant.Territory.OpenTrailPointCount >= MaxRoamingTrailPoints)
-                participant.Territory.ClearOpenTrail();
+                ClearTrail();
             participant.Territory.RecordGroundStep(transform.position, evaluateClaims: roaming);
         }
     }
@@ -131,12 +166,13 @@ public sealed class FuchuBattleNpc : MonoBehaviour
     {
         using (LoopMarker.Auto())
         {
-            if (evaluatedLoopVersion != participant.Territory.Shape.Version)
+            if (evaluatedLoopVersion != Shape.Version)
             {
-                participant.Territory.CompleteNpcLoop(loopPolygon);
-                evaluatedLoopVersion = participant.Territory.Shape.Version;
+                if (onlineState != null) onlineState.ClaimNpcLoop(participant.Id, loopPolygon);
+                else participant.Territory.CompleteNpcLoop(loopPolygon);
+                evaluatedLoopVersion = Shape.Version;
             }
-            else participant.Territory.ClearOpenTrail();
+            else ClearTrail();
         }
         if (!planning && availableLoops.Count > 1)
         {
@@ -155,7 +191,7 @@ public sealed class FuchuBattleNpc : MonoBehaviour
         searchParents[start] = -1;
         searchDistance[start] = 0f;
         searchQueue.Enqueue(start);
-        while (searchQueue.Count > 0 && player != null && !player.RunFinished)
+        while (searchQueue.Count > 0 && !Finished)
         {
             using (SearchMarker.Auto())
             {
@@ -176,7 +212,7 @@ public sealed class FuchuBattleNpc : MonoBehaviour
             }
             yield return null;
         }
-        if (player == null || player.RunFinished) { planning = false; yield break; }
+        if (Finished) { planning = false; yield break; }
 
         // Shortlist nearby loops, preferring blocks not visited by this NPC yet.
         var candidates = new List<(List<int> Loop, int Entry, float Cost)>();
@@ -204,7 +240,7 @@ public sealed class FuchuBattleNpc : MonoBehaviour
         // Polygon difference is expensive: evaluate at most eight candidates, one per frame.
         for (int i = 0; i < Mathf.Min(8, candidates.Count); i++)
         {
-            if (player == null || player.RunFinished) { planning = false; yield break; }
+            if (Finished) { planning = false; yield break; }
             using (SearchMarker.Auto())
             {
                 var candidate = candidates[i];
@@ -214,7 +250,7 @@ public sealed class FuchuBattleNpc : MonoBehaviour
                     Vector3 point = graph[node].Center;
                     polygon.Add(new Vector2(point.x, point.z));
                 }
-                double added = participant.Territory.Shape.AdditionalSquareMeters(polygon);
+                double added = Shape.AdditionalSquareMeters(polygon);
                 float score = (float)added / (1f + candidate.Cost * 0.05f);
                 if (added >= 2.0 && score > bestScore)
                 {
@@ -225,7 +261,7 @@ public sealed class FuchuBattleNpc : MonoBehaviour
             }
             yield return null;
         }
-        if (player == null || player.RunFinished || selected == null) { planning = false; yield break; }
+        if (Finished || selected == null) { planning = false; yield break; }
         var connection = new List<int>();
         int destination = selected[selectedEntry];
         for (int node = destination; node >= 0; node = searchParents[node]) connection.Add(node);
@@ -233,7 +269,7 @@ public sealed class FuchuBattleNpc : MonoBehaviour
         pendingLoop = new List<int>(selected.Count);
         for (int i = 0; i < selected.Count; i++) pendingLoop.Add(selected[(selectedEntry + i) % selected.Count]);
         currentLoop = selected;
-        participant.Territory.ClearOpenTrail();
+        ClearTrail();
         if (connection.Count > 1)
         {
             route = connection;
@@ -257,7 +293,7 @@ public sealed class FuchuBattleNpc : MonoBehaviour
             Vector3 point = graph[node].Center;
             loopPolygon.Add(new Vector2(point.x, point.z));
         }
-        participant.Territory.ClearOpenTrail();
+        ClearTrail();
     }
 
     private bool CanReachItem(Vector3 destination)
@@ -286,6 +322,30 @@ public sealed class FuchuBattleNpc : MonoBehaviour
 
     private void UpdateItemTarget()
     {
+        if (onlineState != null)
+        {
+            if (targetItem >= 0)
+            {
+                var existing = onlineState.Items[targetItem];
+                if (!existing.Active || (transform.parent.TransformPoint(existing.Position) - itemPosition).sqrMagnitude > 0.25f)
+                { targetItem = -1; returningToRoute = true; }
+                return;
+            }
+            if (returningToRoute || Time.time < nextItemScan) return;
+            nextItemScan = Time.time + 0.5f;
+            float best = 144f;
+            for (int i = 0; i < onlineState.Items.Count; i++)
+            {
+                var item = onlineState.Items[i];
+                if (!item.Active) continue;
+                Vector3 world = transform.parent.TransformPoint(item.Position);
+                float distance = (world - transform.position).sqrMagnitude;
+                if (distance >= best || !CanReachItem(world)) continue;
+                best = distance; targetItem = i; itemPosition = world;
+            }
+            if (targetItem >= 0) returnPosition = transform.localPosition;
+            return;
+        }
         FuchuStaminaItems items = player.RecoveryItems;
         if (targetItem >= 0)
         {
@@ -330,7 +390,28 @@ public sealed class FuchuBattleNpc : MonoBehaviour
 
     private void Update()
     {
-        if (player == null || !player.IsPlaying || route == null || planning || Time.deltaTime <= 0f) return;
+        if ((onlineState == null ? player == null || !player.IsPlaying : !onlineState.Playing) || route == null || Time.deltaTime <= 0f) return;
+        if (onlineState != null)
+        {
+            if (!onlineState.Playing || ServerTime >= onlineState.MatchDeadline || !OnlineOwner.IsNpc) return;
+            stamina = OnlineOwner.Stamina;
+            if (correctionVersion != OnlineOwner.CorrectionVersion)
+            {
+                correctionVersion = OnlineOwner.CorrectionVersion;
+                StopAllCoroutines(); planning = false; targetItem = -1; returningToRoute = false;
+                route = new List<int>(initialOnlineRoute); currentLoop = initialOnlineLoop; roaming = initialOnlineRoaming;
+                transferring = false; pendingLoop = null; evaluatedLoopVersion = -1;
+                loopPolygon.Clear();
+                if (!roaming) foreach (int node in route)
+                    loopPolygon.Add(new Vector2(graph[node].Center.x, graph[node].Center.z));
+                target = route.Count > 1 ? 1 : 0;
+                transform.localPosition = OnlineOwner.SpawnPosition;
+                OnlineOwner.Position = transform.localPosition;
+                OnlineOwner.HasPosition = true;
+                ClearTrail();
+            }
+        }
+        if (planning) return;
         stamina = Math.Min(stamina, MaxStamina);
         sprintBonus = Mathf.Min(sprintBonus, SpeedLevel - 1);
         UpdateItemTarget();
@@ -352,7 +433,8 @@ public sealed class FuchuBattleNpc : MonoBehaviour
             bool sprinting = stamina > 0.00001;
             float slice = sprinting ? Mathf.Min(remainingTime, (float)(stamina / FuchuWalkController.SprintStaminaPerSecond)) : remainingTime;
             if (!sprinting) sprintBonus = 0f;
-            float speed = sprinting ? player.BaseSprintSpeed + sprintBonus : player.WalkingSpeed;
+            float speed = sprinting ? BaseSprintSpeed + sprintBonus : WalkSpeed;
+            if (onlineState != null && ServerTime < OnlineOwner.SlowUntil) speed *= 0.5f;
             float step = Mathf.Min(distance, Mathf.Min(0.25f, speed * slice));
             if (distance > 0.0001f)
             {
@@ -374,7 +456,7 @@ public sealed class FuchuBattleNpc : MonoBehaviour
                 }
                 else if (detour)
                 {
-                    if (player.RecoveryItems.TryCollectNpcItem(targetItem, transform.position, out double fraction))
+                    if (onlineState == null && player.RecoveryItems.TryCollectNpcItem(targetItem, transform.position, out double fraction))
                         stamina = Math.Min(MaxStamina, stamina + MaxStamina * fraction);
                     targetItem = -1;
                     returningToRoute = true;
@@ -383,8 +465,11 @@ public sealed class FuchuBattleNpc : MonoBehaviour
                 if (planning) break;
             }
         }
+        if (onlineState != null)
+            onlineState.ProcessMovement(participant.Id, transform.localPosition, moved > 0 && OnlineOwner.Stamina > 0,
+                Time.deltaTime, false, 0, BaseSprintSpeed, ServerTime < OnlineOwner.SlowUntil ? 0.5f : 1f);
         phase += moved * 3f;
-        visual.transform.localPosition = Vector3.up * Mathf.Abs(Mathf.Sin(phase)) * 0.025f;
+        if (visual != null) visual.transform.localPosition = Vector3.up * Mathf.Abs(Mathf.Sin(phase)) * 0.025f;
     }
 
     internal static List<List<int>> FindLoops(FuchuResidentSpawner.TriangleNode[] nodes)

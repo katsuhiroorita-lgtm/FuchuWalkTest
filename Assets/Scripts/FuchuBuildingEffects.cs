@@ -38,6 +38,16 @@ public sealed class FuchuBuildingEffects : MonoBehaviour
     private float nextEmission;
     private FuchuWalkController player;
 
+    internal uint Seed => seed;
+    internal void SetSessionSeed(uint value)
+    {
+        if (seed == value) return;
+        seed = value;
+        // Old-session particles must not retain a different building-effect color.
+        if (particles != null) particles.Clear();
+        nextEmission = 0f;
+    }
+
     internal Vector3 PlayableCenter => new Vector3(center.x, 0f, center.y);
 
     private void Awake()
@@ -87,9 +97,11 @@ public sealed class FuchuBuildingEffects : MonoBehaviour
         particles.Play();
     }
 
-    internal EffectKind GetEffect(string id)
+    internal EffectKind GetEffect(string id) => GetEffect(seed, id);
+
+    internal static EffectKind GetEffect(uint sessionSeed, string id)
     {
-        uint hash = seed;
+        uint hash = sessionSeed;
         unchecked
         {
             foreach (char character in id) hash = (hash ^ character) * 16777619u;
@@ -125,11 +137,18 @@ public sealed class FuchuBuildingEffects : MonoBehaviour
     private void Update()
     {
         if (particles == null || player == null || !player.IsPlaying || Time.time < nextEmission) return;
+        bool online = player.IsOnlineExploration;
+        if (online && !player.Online.MatchPlaying) return;
         nextEmission = Time.time + 2f;
         foreach (var entry in sources)
         {
             Source source = entry.Value;
-            if (source.Captured) continue;
+            if (online)
+            {
+                // Ownership and effect seed come from the host; particles are local visuals only.
+                if (!player.Online.TryGetBuildingOwner(entry.Key, out int owner) || owner >= 0) continue;
+            }
+            else if (source.Captured) continue;
             for (int side = 0; side < 4; side++)
             {
                 Rect box = source.Footprint;

@@ -134,7 +134,9 @@ public sealed class FuchuBuildingIdPicker : MonoBehaviour
         if (player != null && player.BuildingEffects != null && hasId)
         {
             FuchuBuildingEffects.EffectKind effect = player.BuildingEffects.GetEffect(buildingId);
-            double effectPoints = FuchuBuildingEffects.PointsFor(effect, FloorAreaPoints(floorArea));
+            double buildingPoints = FloorAreaPoints(floorArea);
+            if (player.IsOnlineExploration && player.Online.TryGetBuildingPoints(buildingId, out double sharedPoints)) buildingPoints = sharedPoints;
+            double effectPoints = FuchuBuildingEffects.PointsFor(effect, buildingPoints);
             nextInfo += $"\n建物効果: {FuchuBuildingEffects.EffectName(effect)}\n効果ポイント: {effectPoints:N1} pt";
         }
         else nextInfo += "\n建物効果: （不明）\n効果ポイント: （不明）";

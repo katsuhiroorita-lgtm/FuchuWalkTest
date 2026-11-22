@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
@@ -151,7 +152,8 @@ public sealed class FuchuWalkHud : MonoBehaviour
         Rect panel = new Rect(16f, Screen.height - 257f, 330f, 241f);
         GUI.Box(panel, GUIContent.none, panelStyle);
         int seconds = (int)System.Math.Ceiling(player.RemainingRunSeconds);
-        GUI.Label(new Rect(panel.x + 12f, panel.y + 7f, 264f, 26f),
+        GUI.Label(new Rect(panel.x + 12f, panel.y + 7f, 306f, 26f),
+            player.IsOnlineExploration && !player.Online.MatchStarted ? "試合開始を待っています" :
             $"残り時間  {seconds / 60:00}:{seconds % 60:00}", headingStyle);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 36f, 264f, 22f),
             $"スタミナ  {System.Math.Ceiling(player.Stamina):N0} / {player.MaxStamina:N0}", textStyle);
@@ -189,8 +191,12 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), whiteTexture);
         GUI.color = previousColor;
 
-        const float width = 480f;
-        float height = player.RunFinished ? 710f : optionsVisible ? 380f : player.MenuOpen ? 590f : 330f;
+        bool online = player.IsOnlineExploration;
+        bool finished = player.RunFinished || online && player.Online.MatchFinished;
+        bool onlineMenu = player.Online != null && player.Online.MenuVisible &&
+            (!online || !player.Online.MatchStarted) && !optionsVisible;
+        float width = onlineMenu ? 640f : 480f;
+        float height = onlineMenu ? 540f : finished ? (online ? 430f : 710f) : optionsVisible ? 380f : player.MenuOpen ? 590f : 330f;
         float scale = Mathf.Min(1f, Mathf.Min((Screen.width - 20f) / width, (Screen.height - 20f) / height));
         if (scale <= 0f)
         {
@@ -200,7 +206,9 @@ public sealed class FuchuWalkHud : MonoBehaviour
         var position = new Vector3((Screen.width - width * scale) * 0.5f, (Screen.height - height * scale) * 0.5f, 0f);
         GUI.matrix = Matrix4x4.TRS(position, Quaternion.identity, new Vector3(scale, scale, 1f));
         GUI.Box(new Rect(0, 0, width, height), GUIContent.none, panelStyle);
-        if (player.RunFinished)
+        if (onlineMenu)
+            player.Online.DrawMenu(headingStyle, textStyle);
+        else if (finished)
             DrawResults();
         else if (optionsVisible)
             DrawOptions();
@@ -215,9 +223,10 @@ public sealed class FuchuWalkHud : MonoBehaviour
     private void DrawStartMenu()
     {
         GUI.Label(new Rect(24, 24, 432, 40), "府中まち歩き", resultTitleStyle);
-        if (GUI.Button(new Rect(120, 89, 240, 44), "Game Start")) player.BeginRun();
-        if (GUI.Button(new Rect(120, 145, 240, 44), "Option")) optionsVisible = true;
-        if (GUI.Button(new Rect(120, 201, 240, 44), "Exit")) Application.Quit();
+        if (GUI.Button(new Rect(120, 79, 240, 44), "Game Start（NPC対戦）")) player.BeginRun();
+        if (GUI.Button(new Rect(120, 133, 240, 44), "マルチプレイ")) player.Online.OpenMenu();
+        if (GUI.Button(new Rect(120, 187, 240, 44), "Option")) optionsVisible = true;
+        if (GUI.Button(new Rect(120, 241, 240, 44), "Exit")) Application.Quit();
     }
 
     internal void CloseGameplayMenu() => optionsVisible = false;
@@ -227,12 +236,22 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.Label(new Rect(24, 24, 432, 40), "ゲームメニュー", resultTitleStyle);
         int seconds = (int)System.Math.Ceiling(player.RemainingRunSeconds);
         GUI.Label(new Rect(120, 85, 240, 26), $"残り時間  {seconds / 60:00}:{seconds % 60:00}", headingStyle);
+        bool online = player.IsOnlineExploration;
+        if (online) GUI.Label(new Rect(120, 108, 300, 20), (player.Online.DirectConnection ? "接続先：" : "参加コード：") + player.Online.RoomCode, textStyle);
 
         bool previousEnabled = GUI.enabled;
-        GUI.enabled = previousEnabled && !player.ReloadPending;
+        GUI.enabled = previousEnabled && !player.ReloadPending && (!online || !player.Online.IsBusy);
         if (GUI.Button(new Rect(120, 128, 240, 44), "Continue")) player.ContinueRun();
-        if (GUI.Button(new Rect(120, 184, 240, 44), "Retry")) player.ReloadRun(startImmediately: true);
-        if (GUI.Button(new Rect(120, 240, 240, 44), "Home")) player.ReloadRun(startImmediately: false);
+        if (GUI.Button(new Rect(120, 184, 240, 44), online ? (player.Online.DirectConnection ? "接続先をコピー" : "参加コードをコピー") : "Retry"))
+        {
+            if (online) player.Online.CopyRoomCode();
+            else player.ReloadRun(startImmediately: true);
+        }
+        if (GUI.Button(new Rect(120, 240, 240, 44), online ? "退出してタイトルへ" : "Home"))
+        {
+            if (online) _ = player.Online.LeaveAsync();
+            else player.ReloadRun(startImmediately: false);
+        }
         if (GUI.Button(new Rect(120, 296, 240, 44), "Option")) optionsVisible = true;
         GUI.enabled = previousEnabled;
         GUI.Label(new Rect(24, 359, 432, 26), "操作説明", headingStyle);
@@ -276,6 +295,16 @@ public sealed class FuchuWalkHud : MonoBehaviour
         GUI.Label(new Rect(32, 69, 416, 26), $"確定エリア面積  {player.TerritoryCoverage * 100.0:0.0000}%", headingStyle);
         GUI.Label(new Rect(32, 100, 416, 26), $"延床面積ポイント合計  {player.BuildingPoints:N0} pt", headingStyle);
         DrawBattleStandings(new Rect(32, 136, 416, 190));
+        if (player.IsOnlineExploration)
+        {
+            GUI.Label(new Rect(32, 337, 416, 24), "再戦するときは、新しい部屋を作成してください。", textStyle);
+            bool available = GUI.enabled;
+            GUI.enabled = available && !player.Online.IsBusy;
+            if (GUI.Button(new Rect(48, 374, 184, 40), "対戦画面を見る")) player.ContinueRun();
+            if (GUI.Button(new Rect(248, 374, 184, 40), "退出してタイトルへ")) _ = player.Online.LeaveAsync();
+            GUI.enabled = available;
+            return;
+        }
         GUI.Label(new Rect(32, 337, 416, 24),
             player.RunRank > 0 ? $"端末記録での順位  {player.RunRank}位" : "端末記録での順位  トップ10圏外", textStyle);
         GUI.Label(new Rect(32, 368, 416, 26), "面積ランキング　この端末の上位10件", headingStyle);
@@ -298,22 +327,68 @@ public sealed class FuchuWalkHud : MonoBehaviour
         if (retry || home) player.ReloadRun(startImmediately: retry);
     }
 
+    private struct Standing
+    {
+        internal int Id;
+        internal string Name, ColorName;
+        internal Color Color;
+        internal double Coverage;
+    }
+    private readonly List<Standing> standings = new List<Standing>(5);
+
+    private void ReadStandings()
+    {
+        standings.Clear();
+        if (player.IsOnlineExploration)
+        {
+            var state = player.Online.DisplayState;
+            if (state == null || !player.Online.TerritoryReady) return;
+            int localSlot = player.Online.LocalSlot;
+            for (int slot = 0; slot < state.Players.Length; slot++)
+            {
+                var entry = state.Players[slot];
+                if (!entry.Active) continue;
+                standings.Add(new Standing { Id = slot, Name = slot == localSlot ? "あなた" : entry.IsNpc ? "NPC " + (slot + 1) : "プレイヤー " + (slot + 1),
+                    ColorName = FuchuOnlineConnection.DisplayColorName(slot), Color = FuchuOnlineConnection.DisplayColor(slot),
+                    Coverage = entry.Shape.ClaimedSquareMeters / (System.Math.PI * 1000.0 * 1000.0) });
+            }
+        }
+        else if (player.Battle != null)
+            foreach (var entry in player.Battle.Players)
+                standings.Add(new Standing { Id = entry.Id, Name = entry.Name, ColorName = entry.ColorName,
+                    Color = entry.Color, Coverage = entry.Territory.Coverage });
+        standings.Sort((a, b) => {
+            int comparison = b.Coverage.CompareTo(a.Coverage);
+            return comparison != 0 ? comparison : a.Id.CompareTo(b.Id);
+        });
+    }
+
     private void DrawBattleStandings(Rect panel)
     {
-        if (player.Battle == null) return;
+        ReadStandings();
         GUI.Box(panel, GUIContent.none, panelStyle);
+        bool finished = player.RunFinished || player.IsOnlineExploration && player.Online.MatchFinished;
         GUI.Label(new Rect(panel.x + 12, panel.y + 8, panel.width - 24, 26),
-            player.RunFinished ? "対戦結果（確保面積順）" : "5人対戦（確保面積順）", headingStyle);
-        int row = 0;
-        foreach (FuchuBattleMatch.Participant entry in player.Battle.Standings())
+            finished ? "対戦結果（確保面積順）" : "5人対戦（確保面積順）", headingStyle);
+        if (standings.Count == 0)
         {
-            float y = panel.y + 42 + row++ * 27;
+            GUI.Label(new Rect(panel.x + 12, panel.y + 42, panel.width - 24, 24), "対戦情報を同期しています…", textStyle);
+            return;
+        }
+        double previousCoverage = -1;
+        int rank = 0;
+        for (int row = 0; row < standings.Count; row++)
+        {
+            Standing entry = standings[row];
+            if (entry.Coverage != previousCoverage) rank = row + 1;
+            previousCoverage = entry.Coverage;
+            float y = panel.y + 42 + row * 27;
             Color previous = GUI.color;
             GUI.color = entry.Color;
             GUI.DrawTexture(new Rect(panel.x + 12, y + 4, 14, 14), whiteTexture);
             GUI.color = previous;
             GUI.Label(new Rect(panel.x + 34, y, panel.width - 46, 24),
-                $"{player.Battle.Rank(entry)}位 {entry.Name}（{entry.ColorName}）  {entry.Territory.Coverage * 100.0:0.0000}%", textStyle);
+                $"{rank}位 {entry.Name}（{entry.ColorName}）  {entry.Coverage * 100.0:0.0000}%", textStyle);
         }
     }
 

@@ -11,6 +11,9 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
     internal const string OverlayName = "FuchuTerritoryBuildingColor";
 
     private readonly FuchuBattleMatch match;
+    private readonly FuchuOnlineTerritoryView online;
+    private int OwnershipVersion => online != null ? online.Version : match.Version;
+    private Material[] OwnershipMaterials => online != null ? online.BuildingMaterials : match.BuildingMaterials;
     private readonly Transform worldRoot;
     private readonly Dictionary<CesiumModelMetadata, LoadedModel> models = new Dictionary<CesiumModelMetadata, LoadedModel>();
     // Retain values after tile unloading so ownership changes never depend on visibility or LOD.
@@ -37,6 +40,14 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
         tileset = worldRoot != null ? worldRoot.GetComponentInChildren<Cesium3DTileset>() : Object.FindFirstObjectByType<Cesium3DTileset>();
     }
 
+    internal FuchuTerritoryBuildings(Transform root, FuchuBuildingEffects effects, FuchuOnlineTerritoryView online)
+    {
+        this.online = online;
+        this.effects = effects;
+        worldRoot = root;
+        tileset = root != null ? root.GetComponentInChildren<Cesium3DTileset>() : Object.FindFirstObjectByType<Cesium3DTileset>();
+    }
+
     public void RefreshLoadedBuildings()
     {
         if (tileset == null)
@@ -44,10 +55,10 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
             RecalculateOwnedPoints();
             return;
         }
-        bool newArea = scannedVersion != match.Version;
+        bool newArea = scannedVersion != OwnershipVersion;
         if (!newArea && Time.unscaledTime < nextScan) return;
         nextScan = Time.unscaledTime + 0.75f;
-        scannedVersion = match.Version;
+        scannedVersion = OwnershipVersion;
 
         var unloaded = new List<CesiumModelMetadata>();
         foreach (var entry in models)
@@ -66,21 +77,26 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
                 model = new LoadedModel();
                 models.Add(metadata, model);
             }
-            if (model.Primitives.Count == 0) ReadBuildingGeometry(metadata, model);
+            if (model.Primitives.Count == 0)
+            {
+                ReadBuildingGeometry(metadata, model);
+                model.LastCheckedVersion = -1;
+            }
             foreach (Building building in model.Buildings)
             {
                 effects.Register(building.Id, building.Min, building.Max, building.MinHeight);
+                if (online != null) continue;
                 if (building.Id.Length > 0 && !knownBuildings.ContainsKey(building.Id))
                     knownBuildings.Add(building.Id, (building.Min, building.Max, building.GetPoints()));
             }
-            if (model.LastCheckedVersion == match.Version) continue;
-            model.LastCheckedVersion = match.Version;
+            if (model.LastCheckedVersion == OwnershipVersion) continue;
+            model.LastCheckedVersion = OwnershipVersion;
             foreach (Building building in model.Buildings)
             {
-                int owner = match.BuildingOwner(building.Id, building.Min, building.Max);
+                int owner = online != null ? online.OwnerOf(building.Id) : match.BuildingOwner(building.Id, building.Min, building.Max);
                 if (building.Owner != owner) model.NeedsColorUpdate = true;
                 building.Owner = owner;
-                if (owner >= 0) effects.Capture(building.Id);
+                if (online == null && owner >= 0) effects.Capture(building.Id);
             }
         }
 
@@ -104,6 +120,7 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
 
     private void RecalculateOwnedPoints()
     {
+        if (online != null) return;
         TotalPoints = 0.0;
         StaminaCapacityPoints = 0.0;
         movementBuildingPoints = 0.0;
@@ -234,7 +251,7 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
             primitive.OverlayMesh = mesh;
             obj.AddComponent<MeshFilter>().sharedMesh = mesh;
             primitive.OverlayRenderer = obj.AddComponent<MeshRenderer>();
-            primitive.OverlayRenderer.sharedMaterials = match.BuildingMaterials;
+            primitive.OverlayRenderer.sharedMaterials = OwnershipMaterials;
             primitive.OverlayRenderer.shadowCastingMode = ShadowCastingMode.Off;
             primitive.OverlayRenderer.enabled = primitive.Source.enabled;
         }
@@ -263,11 +280,11 @@ internal sealed class FuchuTerritoryBuildings : IDisposable
         {
             if (renderer.name == "FuchuNightWindowQuads") continue;
             Rect bounds = ProjectBounds(renderer.bounds);
-            int owner = match.OwnerAt(bounds.center);
+            int owner = online != null ? online.FacadeOwner(facade.name) : match.OwnerAt(bounds.center);
             if (owner < 0) continue;
             if (!facadeMaterials.ContainsKey(renderer)) facadeMaterials.Add(renderer, renderer.sharedMaterials);
             var colors = new Material[facadeMaterials[renderer].Length];
-            for (int i = 0; i < colors.Length; i++) colors[i] = match.BuildingMaterials[owner];
+            for (int i = 0; i < colors.Length; i++) colors[i] = OwnershipMaterials[owner];
             renderer.sharedMaterials = colors;
         }
     }

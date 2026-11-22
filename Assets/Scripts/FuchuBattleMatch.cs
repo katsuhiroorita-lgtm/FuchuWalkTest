@@ -23,6 +23,10 @@ public sealed class FuchuBattleMatch : MonoBehaviour
     private readonly List<FuchuBattleNpc> bots = new List<FuchuBattleNpc>();
     private readonly Dictionary<string, Vector2> buildingCenters = new Dictionary<string, Vector2>(StringComparer.Ordinal);
     private FuchuWalkController localPlayer;
+    private FuchuResidentSpawner.TriangleNode[] onlineGraph;
+    private List<List<int>> onlineRoutes;
+    internal FuchuResidentSpawner.TriangleNode[] OnlineGraph => onlineGraph;
+    internal List<List<int>> OnlineRoutes => onlineRoutes;
     internal IReadOnlyList<Participant> Players => players;
     internal Material[] BuildingMaterials { get; private set; }
     internal int Version { get; private set; }
@@ -70,6 +74,7 @@ public sealed class FuchuBattleMatch : MonoBehaviour
                 localPlayer.BuildingEffects.PlayableCenter, 995f, weldConnections: true, travelNodes: travelNodes);
         var routes = FuchuBattleNpc.FindLoops(graph);
         if (travelNodes.Count > 0) graph = travelNodes.ToArray();
+        onlineGraph = graph; onlineRoutes = routes;
         var starts = new List<Vector3> { transform.localPosition };
         for (int i = 1; i < PlayerCount; i++)
         {

@@ -101,6 +101,13 @@ public sealed class FuchuStaminaItems : MonoBehaviour
         }
     }
 
+    internal List<Vector3> CopyRoadLocations()
+    {
+        var result = new List<Vector3>(locations.Count);
+        foreach (Vector3 position in locations) result.Add(transform.parent.InverseTransformPoint(position));
+        return result;
+    }
+
     private bool IsClear(Vector3 point)
     {
         Vector3 halfExtents = new Vector3(0.8f, character.height * 0.5f, 0.8f);

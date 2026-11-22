@@ -16,6 +16,52 @@ internal sealed class FuchuTerritoryShape
     private Contact? departure;
     private bool walkedOutside;
 
+    internal bool PathsMatch(Paths64 other)
+    {
+        if (paths.Count != other.Count) return false;
+        for (int i = 0; i < paths.Count; i++)
+        {
+            if (paths[i].Count != other[i].Count) return false;
+            for (int j = 0; j < paths[i].Count; j++)
+                if (paths[i][j].X != other[i][j].X || paths[i][j].Y != other[i][j].Y) return false;
+        }
+        return true;
+    }
+
+    internal Paths64 CopyPaths() => new Paths64(paths.ConvertAll(path => new Path64(path)));
+    internal void ReplaceFromAuthority(Paths64 authoritative) => SetPaths(authoritative);
+
+    internal bool TryClaimWalkStep(List<Vector2> trail, Vector2 point, float closeDistance, out Paths64 triangles)
+    {
+        if (TryClaimAgainstBoundary(trail, point, closeDistance, out triangles)) return true;
+        if (trail.Count < 5) return false;
+        Vector2 last = trail[trail.Count - 1];
+        Vector2 step = point - last;
+        for (int i = 0; i < trail.Count - 4; i++)
+        {
+            Vector2 a = trail[i], b = trail[i + 1];
+            if (Mathf.Max(a.x, b.x) + closeDistance < Mathf.Min(last.x, point.x) ||
+                Mathf.Min(a.x, b.x) - closeDistance > Mathf.Max(last.x, point.x) ||
+                Mathf.Max(a.y, b.y) + closeDistance < Mathf.Min(last.y, point.y) ||
+                Mathf.Min(a.y, b.y) - closeDistance > Mathf.Max(last.y, point.y)) continue;
+            Vector2 edge = b - a;
+            if (edge.sqrMagnitude < 0.000001f) continue;
+            Vector2 crossing;
+            if (TryIntersect(last, step, a, edge, out float along)) crossing = last + step * along;
+            else
+            {
+                crossing = a + edge * Mathf.Clamp01(Vector2.Dot(point - a, edge) / edge.sqrMagnitude);
+                float distance = Vector2.Distance(crossing, point);
+                if (distance > closeDistance || Vector2.Distance(crossing, last) <= distance) continue;
+            }
+            var polygon = new List<Vector2>(trail.Count - i) { crossing };
+            for (int j = i + 1; j < trail.Count; j++) polygon.Add(trail[j]);
+            if (TryClaimLoop(polygon, out triangles)) return true;
+        }
+        triangles = null;
+        return false;
+    }
+
     internal Paths64 LastClaim { get; private set; }
 
     internal bool Remove(Paths64 claimed)

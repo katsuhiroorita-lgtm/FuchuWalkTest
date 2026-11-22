@@ -36,6 +36,16 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
         new VariantDescription("ChildGirl_Lilac", true, true, 0.70f, new Color(0.42f, 0.34f, 0.58f), new Color(0.32f, 0.22f, 0.12f))
     };
 
+    internal void CollectOnlineActors(List<FuchuOnlineMatch.Actor> output)
+    {
+        for (int i = 0; i < residents.Count; i++)
+        {
+            ResidentState resident = residents[i];
+            var bounds = resident.Visual.GetComponent<MeshFilter>().sharedMesh.bounds;
+            output.Add(new FuchuOnlineMatch.Actor(resident.Root, resident.Visual, (byte)(3 + i % Variants.Length), bounds.size));
+        }
+    }
+
     private void Start()
     {
         player = FindFirstObjectByType<FuchuWalkController>();
@@ -54,14 +64,14 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
             return;
         }
 
-        Material skin = CreateMaterial("ResidentSkin", new Color(0.73f, 0.53f, 0.40f));
+        Material skin = FuchuLocalServer.Active ? null : CreateMaterial("ResidentSkin", new Color(0.73f, 0.53f, 0.40f));
         var modelMeshes = new Mesh[Variants.Length];
         var modelMaterials = new Material[Variants.Length][];
         for (int i = 0; i < Variants.Length; i++)
         {
             VariantDescription variant = Variants[i];
-            Material clothes = CreateMaterial("ResidentClothes_" + variant.Name, variant.ClothesColor);
-            Material hair = CreateMaterial("ResidentHair_" + variant.Name, variant.HairColor);
+            Material clothes = FuchuLocalServer.Active ? null : CreateMaterial("ResidentClothes_" + variant.Name, variant.ClothesColor);
+            Material hair = FuchuLocalServer.Active ? null : CreateMaterial("ResidentHair_" + variant.Name, variant.HairColor);
             modelMeshes[i] = BuildModel(variant);
             ownedMeshes.Add(modelMeshes[i]);
             modelMaterials[i] = new[] { skin, clothes, hair };
@@ -81,6 +91,7 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
         for (int i = 0; i < residents.Count; i++)
         {
             ResidentState resident = residents[i];
+            if (!resident.Root.gameObject.activeSelf) continue;
             Vector3 target = nodes[resident.TargetNode].Center;
             Vector3 position = resident.Root.localPosition;
             Vector3 flatDirection = new Vector3(target.x - position.x, 0f, target.z - position.z);
@@ -107,7 +118,7 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
                 resident.Root.localPosition = position;
             }
         }
-        DetectPlayerCollision();
+        if (!FuchuLocalServer.Active && (player == null || !player.IsOnlineExploration)) DetectPlayerCollision();
     }
 
     private void DetectPlayerCollision()
@@ -346,10 +357,13 @@ public sealed class FuchuResidentSpawner : MonoBehaviour
             visual.transform.localPosition = new Vector3(0f, 0.02f, 0f);
             MeshFilter filter = visual.AddComponent<MeshFilter>();
             filter.sharedMesh = modelMeshes[variant];
-            MeshRenderer renderer = visual.AddComponent<MeshRenderer>();
-            renderer.sharedMaterials = modelMaterials[variant];
-            renderer.shadowCastingMode = ShadowCastingMode.Off;
-            renderer.receiveShadows = false;
+            if (!FuchuLocalServer.Active)
+            {
+                MeshRenderer renderer = visual.AddComponent<MeshRenderer>();
+                renderer.sharedMaterials = modelMaterials[variant];
+                renderer.shadowCastingMode = ShadowCastingMode.Off;
+                renderer.receiveShadows = false;
+            }
 
             VariantDescription description = Variants[variant];
             float speed = description.IsChild ? 0.65f + (float)random.NextDouble() * 0.15f : 0.85f + (float)random.NextDouble() * 0.35f;

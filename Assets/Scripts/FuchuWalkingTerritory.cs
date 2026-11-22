@@ -34,6 +34,8 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     private float gpuBorderHeight;
     private float groundSearchHeight;
     private float lastTrailHeight;
+    private uint replicatedGeneration;
+    private int replicatedCount;
 
     private FuchuBattleMatch match;
     internal FuchuTerritoryShape Shape => shape;
@@ -140,6 +142,40 @@ public sealed class FuchuWalkingTerritory : MonoBehaviour
     {
         if (!shape.Remove(claimed)) return;
         // SetPaths invalidates old boundary contacts, but the visible open trail remains playable.
+        RebuildOwnedGround();
+    }
+
+    internal void ReplaceReplicatedShape(Paths64 paths)
+    {
+        if (shape.PathsMatch(paths)) return;
+        shape.ReplaceFromAuthority(paths);
+        RebuildOwnedGround();
+    }
+
+    internal void DrawReplicatedTrail(IReadOnlyList<Vector2> points, uint generation)
+    {
+        if (openLine == null) return;
+        if (generation != replicatedGeneration || points.Count < replicatedCount)
+        {
+            openLine.positionCount = 0;
+            replicatedCount = 0;
+            replicatedGeneration = generation;
+        }
+        if (points.Count == replicatedCount) return;
+        openLine.positionCount = points.Count;
+        Quaternion inverse = Quaternion.Inverse(TrailRotation);
+        for (int i = replicatedCount; i < points.Count; i++)
+        {
+            if (!TryGroundPoint(points[i], TrailHeight, out Vector3 point))
+                point = new Vector3(points[i].x, lastTrailHeight, points[i].y);
+            lastTrailHeight = point.y;
+            openLine.SetPosition(i, inverse * point);
+        }
+        replicatedCount = points.Count;
+    }
+
+    private void RebuildOwnedGround()
+    {
         StopAllCoroutines();
         fillingGround = false;
         gpuBordersPending = false;

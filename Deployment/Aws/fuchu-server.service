@@ -1,0 +1,33 @@
+[Unit]
+Description=Fuchu dedicated game server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=fuchu
+Group=fuchu
+WorkingDirectory=/opt/fuchu/current
+EnvironmentFile=/etc/fuchu/server.env
+Environment=HOME=/var/lib/fuchu
+Environment=XDG_CONFIG_HOME=/var/lib/fuchu/config
+Environment=XDG_CACHE_HOME=/var/lib/fuchu/cache
+ExecStart=/opt/fuchu/current/FuchuServer.x86_64 -batchmode -nographics -fuchu-bind ${FUCHU_BIND} -fuchu-port ${FUCHU_PORT} -logFile /var/log/fuchu/server.log
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0027
+StateDirectory=fuchu
+LogsDirectory=fuchu
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/fuchu /var/log/fuchu
+MemoryMax=3G
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target
