@@ -122,6 +122,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
         {
             DrawPlayerStatus();
             DrawBattleStandings(new Rect(Screen.width - 346f, Screen.height - 231f, 330f, 215f));
+            if (player.IsOnlineExploration) DrawOnlineCountdown();
         }
 #if UNITY_EDITOR
         if (timeMenuVisible)
@@ -147,12 +148,22 @@ public sealed class FuchuWalkHud : MonoBehaviour
         }
     }
 
+    private void DrawOnlineCountdown()
+    {
+        int countdown = player.Online.Countdown;
+        if (countdown == 0 && !player.Online.ShowingGo) return;
+        var frame = new Rect((Screen.width - 160f) * 0.5f, (Screen.height - 94f) * 0.45f, 160f, 94f);
+        GUI.Box(frame, GUIContent.none, panelStyle);
+        GUI.Label(frame, countdown > 0 ? countdown.ToString() : "スタート", resultTitleStyle);
+    }
+
     private void DrawPlayerStatus()
     {
         Rect panel = new Rect(16f, Screen.height - 257f, 330f, 241f);
         GUI.Box(panel, GUIContent.none, panelStyle);
         int seconds = (int)System.Math.Ceiling(player.RemainingRunSeconds);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 7f, 306f, 26f),
+            player.IsOnlineExploration && player.Online.Countdown > 0 ? "まもなく試合開始" :
             player.IsOnlineExploration && !player.Online.MatchStarted ? "試合開始を待っています" :
             $"残り時間  {seconds / 60:00}:{seconds % 60:00}", headingStyle);
         GUI.Label(new Rect(panel.x + 12f, panel.y + 36f, 264f, 22f),
@@ -196,7 +207,7 @@ public sealed class FuchuWalkHud : MonoBehaviour
         bool onlineMenu = player.Online != null && player.Online.MenuVisible &&
             (!online || !player.Online.MatchStarted) && !optionsVisible;
         float width = onlineMenu ? 640f : 480f;
-        float height = onlineMenu ? 540f : finished ? (online ? 430f : 710f) : optionsVisible ? 380f : player.MenuOpen ? 590f : 330f;
+        float height = onlineMenu ? 540f : finished ? (online ? 482f : 710f) : optionsVisible ? 380f : player.MenuOpen ? 590f : 330f;
         float scale = Mathf.Min(1f, Mathf.Min((Screen.width - 20f) / width, (Screen.height - 20f) / height));
         if (scale <= 0f)
         {
@@ -297,11 +308,16 @@ public sealed class FuchuWalkHud : MonoBehaviour
         DrawBattleStandings(new Rect(32, 136, 416, 190));
         if (player.IsOnlineExploration)
         {
-            GUI.Label(new Rect(32, 337, 416, 24), "再戦するときは、新しい部屋を作成してください。", textStyle);
+            var online = player.Online;
+            GUI.Label(new Rect(32, 337, 416, 24), online.CanStartMatch
+                ? "再戦の準備をすると、全員が待機画面に戻ります。"
+                : "開始権限を持つ参加者が再戦を準備できます。", textStyle);
             bool available = GUI.enabled;
-            GUI.enabled = available && !player.Online.IsBusy;
-            if (GUI.Button(new Rect(48, 374, 184, 40), "対戦画面を見る")) player.ContinueRun();
-            if (GUI.Button(new Rect(248, 374, 184, 40), "退出してタイトルへ")) _ = player.Online.LeaveAsync();
+            GUI.enabled = available && online.CanScheduleMatch;
+            if (GUI.Button(new Rect(48, 367, 384, 40), "再戦の準備")) online.RequestRematch();
+            GUI.enabled = available && !online.IsBusy;
+            if (GUI.Button(new Rect(48, 421, 184, 40), "対戦画面を見る")) player.ContinueRun();
+            if (GUI.Button(new Rect(248, 421, 184, 40), "退出してタイトルへ")) _ = online.LeaveAsync();
             GUI.enabled = available;
             return;
         }

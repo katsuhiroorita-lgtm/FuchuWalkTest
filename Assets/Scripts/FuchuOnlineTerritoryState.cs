@@ -8,6 +8,8 @@ using UnityEngine;
 internal sealed class FuchuOnlineTerritoryState
 {
     internal const int PlayerCount = 5;
+    internal const double CountdownSeconds = 3;
+    internal const double MatchSeconds = 300;
     internal const int MaxTrailPoints = 2048;
     internal const int MaxSnapshotBytes = 4 * 1024 * 1024;
     internal sealed class Participant
@@ -50,16 +52,21 @@ internal sealed class FuchuOnlineTerritoryState
     internal readonly List<RecoveryItem> Items = new List<RecoveryItem>(300);
     internal uint GameplaySequence;
     internal bool MatchStarted, MatchFinished;
+    internal double MatchStartAt;
     internal double MatchDeadline;
     internal bool Playing => MatchStarted && !MatchFinished;
     internal void StartMatch(double serverTime)
     {
-        if (MatchStarted) return;
-        MatchStarted = true; MatchDeadline = serverTime + 300.0;
+        if (MatchStartAt > 0) return;
+        MatchStartAt = serverTime + CountdownSeconds;
+        MatchDeadline = MatchStartAt + MatchSeconds;
+        Revision++;
     }
     internal void TickMatch(double serverTime)
     {
-        if (!Playing || serverTime < MatchDeadline) return;
+        if (MatchStartAt <= 0 || serverTime < MatchStartAt || MatchFinished) return;
+        MatchStarted = true;
+        if (serverTime < MatchDeadline) return;
         MatchFinished = true;
         for (int i = 0; i < PlayerCount; i++) ClearTrail(i);
         Revision++;
@@ -96,6 +103,9 @@ internal sealed class FuchuOnlineTerritoryState
         for (int i = 0; i < Players.Length; i++) Players[i] = new Participant();
         for (int i = 0; i < Owners.Length; i++) Owners[i] = 255;
     }
+
+    internal FuchuOnlineTerritoryState CreateNextRound() =>
+        new FuchuOnlineTerritoryState(Catalog, Center, Seed) { Revision = Revision + 1 };
 
     internal void Bind(int slot, ulong peer, bool npc = false)
     {
@@ -296,7 +306,7 @@ internal sealed class FuchuOnlineTerritoryState
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         {
-            writer.Write(5); writer.Write(Revision); writer.Write(Seed); writer.Write(GameplaySequence);
+            writer.Write(FuchuOnlineConnection.ProtocolVersion); writer.Write(Revision); writer.Write(Seed); writer.Write(GameplaySequence);
             WriteMatch(writer);
             writer.Write(Catalog.Hash);
             for (int slot = 0; slot < Players.Length; slot++)
@@ -328,11 +338,11 @@ internal sealed class FuchuOnlineTerritoryState
         using (var stream = new MemoryStream(bytes, false))
         using (var reader = new BinaryReader(stream))
         {
-            if (reader.ReadInt32() != 5) throw new InvalidDataException("Protocol mismatch");
+            if (reader.ReadInt32() != FuchuOnlineConnection.ProtocolVersion) throw new InvalidDataException("Protocol mismatch");
             state.Revision = reader.ReadInt32();
             if (state.Revision < 0) throw new InvalidDataException("Invalid revision");
             state.Seed = reader.ReadUInt32(); state.GameplaySequence = reader.ReadUInt32();
-            state.ReadMatch(reader);
+            ReadMatch(reader, out state.MatchStarted, out state.MatchFinished, out state.MatchStartAt, out state.MatchDeadline);
             if (reader.ReadString() != catalog.Hash) throw new InvalidDataException("Building catalogue mismatch");
             int total = 0;
             for (int i = 0; i < PlayerCount; i++)
@@ -399,14 +409,16 @@ internal sealed class FuchuOnlineTerritoryState
 
     internal void WriteMatch(BinaryWriter writer)
     {
-        writer.Write(MatchStarted); writer.Write(MatchFinished); writer.Write(MatchDeadline);
+        writer.Write(MatchStarted); writer.Write(MatchFinished); writer.Write(MatchStartAt); writer.Write(MatchDeadline);
     }
-    internal void ReadMatch(BinaryReader reader)
+    internal static void ReadMatch(BinaryReader reader, out bool started, out bool finished, out double startAt, out double deadline)
     {
-        bool started = reader.ReadBoolean(), finished = reader.ReadBoolean();
-        double deadline = ReadPositive(reader);
-        if (finished && !started || started && deadline <= 0) throw new InvalidDataException("Invalid match clock");
-        MatchStarted = started; MatchFinished = finished; MatchDeadline = deadline;
+        started = reader.ReadBoolean();
+        finished = reader.ReadBoolean();
+        startAt = ReadPositive(reader);
+        deadline = ReadPositive(reader);
+        if (finished && !started || startAt == 0 && (started || deadline != 0) ||
+            startAt > 0 && deadline != startAt + MatchSeconds) throw new InvalidDataException("Invalid match clock");
     }
     internal static Vector3 ReadPosition(BinaryReader reader)
     {

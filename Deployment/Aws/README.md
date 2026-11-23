@@ -25,7 +25,7 @@ AWS Price List の Linux オンデマンドは US$0.11072/時間、gp3 は US$0.
 
 1. Unity Hubで現在のEditorに **Linux Dedicated Server Build Support** を追加します。Unity 6000.3.27f2 には追加済みです。
 2. UnityでSampleSceneを保存し、**Fuchu Walk → Local Server → Build Linux Server (AWS)** を実行します。Windows用・クライアント用と混ぜず、新しい出力フォルダー（例：Builds/LinuxServer）を選びます。
-3. Linux x86_64のDedicated Serverを、サーバー専用シーンだけでビルドします。`server-manifest.json` にプラットフォーム・Unity版・ゲーム版・プロトコル5を記録します。バッチモードでは、生成済みのサーバー専用シーンを使用し、`FUCHU_LINUX_BUILD_DIRECTORY` に空の出力先の絶対パスを指定して `-buildTarget Linux64 -standaloneBuildSubtarget Server -executeMethod FuchuLocalServerBuild.BuildLinuxServerBatch` を実行します。
+3. Linux x86_64のDedicated Serverを、サーバー専用シーンだけでビルドします。`server-manifest.json` にプラットフォーム・Unity版・ゲーム版・プロトコル6を記録します。バッチモードでは、生成済みのサーバー専用シーンを使用し、`FUCHU_LINUX_BUILD_DIRECTORY` に空の出力先の絶対パスを指定して `-buildTarget Linux64 -standaloneBuildSubtarget Server -executeMethod FuchuLocalServerBuild.BuildLinuxServerBatch` を実行します。
 4. Ubuntu 22.04のローカル環境がある場合は、バンドルをコピーし、`chmod +x FuchuServer.x86_64 UnityCrashHandler64`（後者が存在する場合）を行い、`bash StartLocalServer.sh` で起動してWindowsクライアントから確認します。別PCからは環境変数 `FUCHU_BIND=0.0.0.0` を設定して起動します。WSL2を利用する場合はそのネットワーク設定に応じて接続先が変わります。こちらではWSLやLinux VMを作成・起動していません。
 5. 配布用アーカイブをローカルで作ります。次はPowerShellの例です（プロジェクトルートで実行）。
 
@@ -70,7 +70,7 @@ free -h
 ```
 
 8. Windowsクライアントの **マルチプレイ → 専用サーバー（IP接続）**（旧名称：ローカル専用サーバー）で、EC2の現在のパブリックIPv4と7777を入力します。管理プレイヤーが試合を開始し、3人で領域・NPC・接触・タイマーを確認します。参加者のIPv4が変わった場合は許可設定の更新が必要です。
-9. systemdは異常終了時のみ再起動し、繰り返す場合は起動制限で停止します。ゲームの終了ではプロセスを自動再起動しません。1プロセス1試合のため、再戦は全員退出後に `sudo systemctl restart fuchu-server` を行います。旧プロセスの領域・試合は復元されません。
+9. systemdは異常終了時のみ再起動し、繰り返す場合は起動制限で停止します。ゲームの終了ではプロセスを自動再起動しません。プロトコル6では、結果画面の「再戦の準備」で参加者全員を待機画面に戻せます。再戦するには、サーバーとクライアントを両方ともプロトコル6で再ビルドしてください。
 
 ## 停止と後片付け
 

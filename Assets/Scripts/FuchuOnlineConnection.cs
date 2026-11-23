@@ -13,12 +13,13 @@ using UnityEngine;
 /// <summary>Explicit opt-in Relay session and NGO pose synchronization. No cloud requests in Awake/Start.</summary>
 public sealed class FuchuOnlineConnection : MonoBehaviour
 {
-    private const string PoseMessage = "Fuchu.Preview.Pose.v5";
-    private const string StartMessage = "Fuchu.Match.Start.v5";
-    private const string SnapshotMessage = "Fuchu.Preview.Snapshot.v5";
+    public const int ProtocolVersion = 6;
+    private const string PoseMessage = "Fuchu.Preview.Pose.v6";
+    private const string RoundMessage = "Fuchu.Match.Round.v6";
+    private const string SnapshotMessage = "Fuchu.Preview.Snapshot.v6";
     private const int MaxPlayers = 5;
     private const float SendInterval = 0.05f;
-    private const double MaxSessionSeconds = 600.0;
+    private const double MaxSessionSeconds = 900.0;
     private static readonly Color[] Colors = { new Color(0.08f, 0.42f, 1f), Color.red,
         Color.yellow, Color.green, new Color(0.65f, 0.18f, 0.95f) };
     private static readonly string[] ColorNames = { "青", "赤", "黄", "緑", "紫" };
@@ -58,6 +59,14 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
     internal double RemainingSeconds => territorySync != null && territorySync.State.MatchStarted ? Math.Max(0, territorySync.State.MatchDeadline - ServerTime) : 300;
     internal bool MatchStarted => territorySync != null && territorySync.State.MatchStarted;
     internal bool MatchFinished => territorySync != null && territorySync.State.MatchFinished;
+    private double MatchStartAt => territorySync != null ? territorySync.State.MatchStartAt : 0;
+    internal int Countdown => TerritoryReady && MatchStartAt > 0 && !MatchFinished
+        ? (int)Math.Ceiling(Math.Clamp(MatchStartAt - ServerTime, 0, FuchuOnlineTerritoryState.CountdownSeconds)) : 0;
+    internal bool ShowingGo => MatchPlaying && ServerTime - MatchStartAt < 0.75;
+    internal bool CanScheduleMatch => CanStartMatch && TerritoryReady && !busy &&
+        (direct || Time.realtimeSinceStartupAsDouble - connectedAt <
+            MaxSessionSeconds - FuchuOnlineTerritoryState.MatchSeconds - FuchuOnlineTerritoryState.CountdownSeconds);
+    private double observedMatchStart;
     internal FuchuOnlineTerritoryState DisplayState => territorySync?.State;
     internal int LocalSlot => territorySync != null && network != null ? territorySync.State.SlotOf(network.LocalClientId) : -1;
     internal double LocalCoverage => (LocalGrowth?.Shape.ClaimedSquareMeters ?? 0.0) / (Math.PI * 1000.0 * 1000.0);
@@ -103,7 +112,7 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
     internal bool Exploring { get; private set; }
     internal bool MenuVisible => !dedicated && pageOpen && (!Exploring || player.MenuOpen);
     internal bool IsBusy => busy;
-    private string Protocol => "FuchuWalkMatch-v5|" + Application.version + "|" + buildingCatalog.Hash;
+    private string Protocol => $"FuchuWalkMatch-v{ProtocolVersion}|" + Application.version + "|" + buildingCatalog.Hash;
     private int PlayerCount
     {
         get
@@ -151,7 +160,7 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
         network.NetworkConfig = new NetworkConfig
         {
             NetworkTransport = transport,
-            ProtocolVersion = 5,
+            ProtocolVersion = ProtocolVersion,
             ConnectionApproval = true,
             ConnectionData = Encoding.UTF8.GetBytes(Protocol),
             EnableSceneManagement = false,
@@ -185,7 +194,7 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
         if (handlersRegistered || network == null || network.CustomMessagingManager == null) return;
         network.CustomMessagingManager.RegisterNamedMessageHandler(PoseMessage, ReceivePose);
         network.CustomMessagingManager.RegisterNamedMessageHandler(SnapshotMessage, ReceiveSnapshot);
-        network.CustomMessagingManager.RegisterNamedMessageHandler(StartMessage, ReceiveStart);
+        network.CustomMessagingManager.RegisterNamedMessageHandler(RoundMessage, ReceiveRoundAction);
         territorySync.Register();
         handlersRegistered = true;
     }
@@ -222,7 +231,11 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
             if (poses.TryGetValue(id, out PeerPose removed) && !finished) territorySync.Release(removed.Slot);
             poses.Remove(id);
             if (removed != null && !finished) match?.FillSlot(removed.Slot);
-            if (dedicated && removed != null) Debug.Log($"[FuchuServer] DISCONNECT peer={id} humans={poses.Count} replacedByNpc={!finished}");
+            if (dedicated && removed != null)
+            {
+                Debug.Log($"[FuchuServer] DISCONNECT peer={id} humans={poses.Count} replacedByNpc={!finished}");
+                if (poses.Count == 0 && MatchStartAt > 0) ResetRound();
+            }
             if (avatars.TryGetValue(id, out FuchuOnlineAvatar avatar)) { avatar.Dispose(); avatars.Remove(id); }
         }
         else if (id == network.LocalClientId && !busy)
@@ -247,7 +260,7 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
             Exploring = true;
             territorySync.StartView();
             match = new FuchuOnlineMatch(simulation, network, territorySync, Colors);
-            Debug.Log($"[FuchuServer] LISTENING {bindAddress}:{port} protocol=5 slots=5 NPC={match.NpcCount}");
+            Debug.Log($"[FuchuServer] LISTENING {bindAddress}:{port} protocol={ProtocolVersion} slots=5 NPC={match.NpcCount}");
         }
         catch { Exploring = false; DestroyNetworkManager(); enabled = false; throw; }
     }
@@ -289,21 +302,60 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
     }
     private void RequestMatchStart()
     {
-        if (!CanStartMatch || !TerritoryReady || territorySync.State.MatchStarted) return;
-        if (network.IsServer) territorySync.State.StartMatch(ServerTime);
-        else using (var writer = new FastBufferWriter(1, Allocator.Temp))
+        if (MatchStartAt == 0) RequestRoundAction(1);
+    }
+
+    internal void RequestRematch()
+    {
+        if (MatchFinished) RequestRoundAction(2);
+    }
+
+    private void RequestRoundAction(byte action)
+    {
+        if (!CanScheduleMatch) return;
+        if (network.IsServer) ApplyRoundAction(action);
+        else using (var writer = new FastBufferWriter(9, Allocator.Temp))
         {
-            writer.WriteValueSafe((byte)1);
-            network.CustomMessagingManager.SendNamedMessage(StartMessage, NetworkManager.ServerClientId, writer, NetworkDelivery.ReliableSequenced);
+            writer.WriteValueSafe(action);
+            writer.WriteValueSafe(MatchStartAt);
+            network.CustomMessagingManager.SendNamedMessage(RoundMessage, NetworkManager.ServerClientId, writer, NetworkDelivery.ReliableSequenced);
         }
     }
-    private void ReceiveStart(ulong sender, FastBufferReader reader)
+    private void ReceiveRoundAction(ulong sender, FastBufferReader reader)
     {
-        if (!dedicated || !network.IsServer || sender != StartPeer || !poses.ContainsKey(sender) || reader.Length - reader.Position != 1) return;
+        if (!dedicated || !network.IsServer || sender != StartPeer || !poses.ContainsKey(sender) || reader.Length - reader.Position != 9) return;
         reader.ReadValueSafe(out byte action);
-        if (action != 1 || territorySync.State.MatchStarted) return;
+        reader.ReadValueSafe(out double expectedStart);
+        if (expectedStart == MatchStartAt) ApplyRoundAction(action);
+    }
+
+    private void ApplyRoundAction(byte action)
+    {
+        if (action == 2 && MatchFinished) ResetRound();
+        if (action != 1 || MatchStartAt > 0) return;
         territorySync.State.StartMatch(ServerTime);
-        Debug.Log($"[FuchuServer] MATCH_STARTED by peer={sender}, humans={poses.Count}, NPC={match.NpcCount}, duration=300s");
+        if (dedicated)
+            Debug.Log($"[FuchuServer] MATCH_SCHEDULED at={MatchStartAt:F3}, humans={poses.Count}, NPC={match.NpcCount}");
+    }
+
+    private void ResetRound()
+    {
+        var previous = territorySync.State;
+        territorySync.ResetRound();
+        match.ResetRound();
+        foreach (var pair in poses)
+        {
+            var pose = pair.Value;
+            territorySync.Bind(pose.Slot, pair.Key);
+            var participant = territorySync.State.Players[pose.Slot];
+            participant.CorrectionVersion = previous.Players[pose.Slot].CorrectionVersion + 1;
+            participant.CorrectionPosition = participant.SpawnPosition = participant.Position = simulation.Spawn;
+            participant.HasPosition = true;
+            pose.HasRecord = false;
+            pose.Position = simulation.Spawn;
+        }
+        for (int slot = 0; slot < MaxPlayers; slot++)
+            if (!territorySync.State.Players[slot].Active) match.FillSlot(slot);
     }
 
     internal async Task ConnectAsync(bool create)
@@ -410,7 +462,7 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
             {
                 network.CustomMessagingManager.UnregisterNamedMessageHandler(PoseMessage);
                 network.CustomMessagingManager.UnregisterNamedMessageHandler(SnapshotMessage);
-                network.CustomMessagingManager.UnregisterNamedMessageHandler(StartMessage);
+                network.CustomMessagingManager.UnregisterNamedMessageHandler(RoundMessage);
             }
             network.Shutdown();
             Destroy(network.gameObject);
@@ -420,6 +472,7 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
         receivedSnapshot = poseSequence = snapshotSequence = 0;
         placedNearHost = false;
         localResetEpoch = 0;
+        observedMatchStart = 0;
         controlPeer = ulong.MaxValue;
         directCompletion = null;
         if (backgroundSaved && !dedicated) Application.runInBackground = savedBackground;
@@ -440,15 +493,26 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
     {
         if (!Exploring || leaving || network == null || !network.IsListening || !network.IsServer && !network.IsConnectedClient) return;
         if (!direct && Time.realtimeSinceStartupAsDouble - connectedAt >= MaxSessionSeconds)
-        { _ = LeaveAsync("接続確認は10分で自動退出しました。"); return; }
+        { _ = LeaveAsync("接続は15分で自動退出しました。"); return; }
         try
         {
             territorySync.Tick(); match?.Tick();
+            if (TerritoryReady && MatchStartAt != observedMatchStart)
+            {
+                observedMatchStart = MatchStartAt;
+                showedResults = false;
+                if (observedMatchStart == 0)
+                {
+                    pageOpen = true;
+                    player?.ShowOnlineLobby();
+                }
+                else if (!MatchFinished) player?.ContinueRun();
+            }
             if (territorySync.State.MatchFinished && !showedResults)
             {
                 showedResults = true;
                 if (player != null) player.ShowOnlineResults();
-                else Debug.Log("[FuchuServer] MATCH_FINISHED: 確保面積と順位を確定しました。再戦はサーバーを再起動してください。");
+                else Debug.Log("[FuchuServer] MATCH_FINISHED: 確保面積と順位を確定しました。");
             }
         }
         catch (Exception exception)
@@ -617,9 +681,9 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
             if (GUI.Button(new Rect(24, 302, 280, 44), territorySync.State.MatchFinished ? "結果を見る（Escでメニュー）" : TerritoryReady ? "ゲーム画面へ（Escでメニュー）" : "領域データを同期しています…")) player.ContinueRun();
             GUI.enabled = previous && !busy;
             if (GUI.Button(new Rect(324, 302, 292, 44), "退出する")) _ = LeaveAsync();
-            if (CanStartMatch && !territorySync.State.MatchStarted)
+            if (CanStartMatch && MatchStartAt == 0)
             {
-                bool canStart = TerritoryReady && (direct || Time.realtimeSinceStartupAsDouble - connectedAt < MaxSessionSeconds - 305);
+                bool canStart = CanScheduleMatch;
                 GUI.enabled = previous && !busy && canStart;
                 if (GUI.Button(new Rect(24, 358, 592, 40), canStart ? "5分間の試合を開始（空き枠はNPC）" : "待機時間の上限です。退出して部屋を作り直してください"))
                     RequestMatchStart();
@@ -631,7 +695,7 @@ public sealed class FuchuOnlineConnection : MonoBehaviour
                 GUI.Label(new Rect(24, 362, 592, 28), territorySync.State.MatchFinished ? "試合終了：確定した領域面積で順位を決定" :
                     territorySync.State.MatchStarted ? $"試合中　残り {remaining / 60:00}:{remaining % 60:00}" : direct ? "管理プレイヤー（最初の参加者）の試合開始を待っています" : "ホストの試合開始を待っています", text);
             }
-            GUI.Label(new Rect(24, 410, 592, 100), "Esc中も試合は進行します。WASD移動／マウス視点／Shiftダッシュ／Spaceジャンプ\nF5：開始地点へ／F2：出典表示\n" + (direct ? "専用サーバーが進行を管理します。参加者が退出しても部屋は継続します。" : "ホスト退出で部屋終了。接続は最大10分で自動退出します。"), text);
+            GUI.Label(new Rect(24, 410, 592, 100), "開始すると全員の画面に3秒のカウントダウンが表示されます。\nWASD移動／マウス視点／Shiftダッシュ／Spaceジャンプ\n" + (direct ? "専用サーバーが進行を管理します。" : "ホスト退出で部屋終了。接続は最大15分で自動退出します。"), text);
         }
         else
         {

@@ -97,7 +97,7 @@ public static class FuchuLocalServerBuild
     {
         public int formatVersion = 1;
         public string target;
-        public int protocolVersion = 5;
+        public int protocolVersion = FuchuOnlineConnection.ProtocolVersion;
         public string unityVersion = Application.unityVersion;
         public string applicationVersion = Application.version;
         public string builtUtc = DateTime.UtcNow.ToString("O");

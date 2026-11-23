@@ -73,6 +73,11 @@ public sealed class FuchuWalkController : MonoBehaviour
         MenuOpen = true; OnlineSprintRequested = false; sprintBonus = 0;
         Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
     }
+    internal void ShowOnlineLobby()
+    {
+        ShowOnlineResults();
+        walkHud?.CloseGameplayMenu();
+    }
     private double unsentOnlineStaminaCost;
     private readonly Queue<(uint Sequence, double Cost)> onlineStaminaCosts = new Queue<(uint, double)>();
 
@@ -323,6 +328,8 @@ public sealed class FuchuWalkController : MonoBehaviour
         }
 
         SyncOwnedGrowth();
+        if (IsOnlineExploration && Online.Countdown > 0)
+        { OnlineSprintRequested = false; return; }
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null)
             return;

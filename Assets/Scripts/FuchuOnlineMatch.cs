@@ -7,7 +7,7 @@ using UnityEngine;
 /// <summary>Host simulation of road actors and NPCs; clients only interpolate their projections.</summary>
 internal sealed class FuchuOnlineMatch : IDisposable
 {
-    private const string WorldMessage = "Fuchu.World.v5";
+    private const string WorldMessage = "Fuchu.World.v6";
     internal sealed class Actor
     {
         internal readonly Transform Root, Visual;
@@ -69,9 +69,19 @@ internal sealed class FuchuOnlineMatch : IDisposable
     }
     internal void HumanJoined(int slot)
     {
-        if (bots[slot] != null) { UnityEngine.Object.Destroy(bots[slot].gameObject); bots[slot] = null; }
+        if (bots[slot] != null)
+        {
+            bots[slot].enabled = false;
+            UnityEngine.Object.Destroy(bots[slot].gameObject);
+            bots[slot] = null;
+        }
         nextCarHit[slot] = 0; hadPlayer[slot] = false;
         foreach (var actor in actors) actor.Touching &= (byte)~(1 << slot);
+    }
+    internal void ResetRound()
+    {
+        for (int slot = 0; slot < bots.Length; slot++) HumanJoined(slot);
+        foreach (var actor in actors) actor.Root.gameObject.SetActive(actor.WasActive);
     }
     internal void FillSlot(int slot)
     {

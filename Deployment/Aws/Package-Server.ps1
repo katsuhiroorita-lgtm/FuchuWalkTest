@@ -14,7 +14,7 @@ if ((Test-Path -LiteralPath $archivePath) -or (Test-Path -LiteralPath ($archiveP
 $manifestPath = Join-Path $buildRoot 'server-manifest.json'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Build with Build Linux Server (AWS) first.' }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.formatVersion -ne 1 -or $manifest.target -ne 'linux-x86_64' -or $manifest.protocolVersion -ne 5) {
+if ($manifest.formatVersion -ne 1 -or $manifest.target -ne 'linux-x86_64' -or $manifest.protocolVersion -notin @(5, 6)) {
     throw 'Unexpected server manifest / protocol.'
 }
 foreach ($required in @('FuchuServer.x86_64', 'FuchuServer_Data', 'UnityPlayer.so', 'StartLocalServer.sh')) {

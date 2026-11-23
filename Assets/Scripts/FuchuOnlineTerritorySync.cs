@@ -9,10 +9,10 @@ using UnityEngine;
 /// <summary>Reliable state transfer and host-only walking/ownership decisions, separate from session UI.</summary>
 internal sealed class FuchuOnlineTerritorySync : IDisposable
 {
-    private const string StateMessage = "Fuchu.Territory.State.v5";
-    private const string TrailMessage = "Fuchu.Territory.Trail.v5";
-    private const string RequestMessage = "Fuchu.Territory.Request.v5";
-    private const string GameplayMessage = "Fuchu.Gameplay.v5";
+    private const string StateMessage = "Fuchu.Territory.State.v6";
+    private const string TrailMessage = "Fuchu.Territory.Trail.v6";
+    private const string RequestMessage = "Fuchu.Territory.Request.v6";
+    private const string GameplayMessage = "Fuchu.Gameplay.v6";
     private const int ChunkSize = 4096;
     private const int MaxCompressed = 2 * 1024 * 1024;
     private readonly NetworkManager network;
@@ -87,6 +87,17 @@ internal sealed class FuchuOnlineTerritorySync : IDisposable
     {
         if (!network.IsServer) return;
         State.Bind(slot, peer);
+        forceFull = true;
+    }
+    internal void ResetRound()
+    {
+        var previous = State;
+        State = State.CreateNextRound();
+        State.InitializeRecoveryItems(roadLocations);
+        for (int i = 0; i < State.Items.Count; i++)
+            State.Items[i].Version = previous.Items[i].Version + 1;
+        view?.BindState(State);
+        outgoing = null;
         forceFull = true;
     }
     internal void BindNpc(byte slot)
@@ -252,10 +263,8 @@ internal sealed class FuchuOnlineTerritorySync : IDisposable
                 int revision = binary.ReadInt32(); uint sequence = binary.ReadUInt32();
                 if (revision != State.Revision) { Ready = false; nextRequest = 0; return; }
                 if (sequence <= State.GameplaySequence) return;
-                bool matchStarted = binary.ReadBoolean(), matchFinished = binary.ReadBoolean();
-                double matchDeadline = binary.ReadDouble();
-                if (double.IsNaN(matchDeadline) || double.IsInfinity(matchDeadline) || matchDeadline < 0 || matchDeadline > 1e12 ||
-                    matchFinished && !matchStarted || matchStarted && matchDeadline <= 0) throw new InvalidDataException("Invalid match clock");
+                FuchuOnlineTerritoryState.ReadMatch(binary, out bool matchStarted, out bool matchFinished,
+                    out double matchStartAt, out double matchDeadline);
                 for (int i = 0; i < 5; i++)
                     FuchuOnlineTerritoryState.ReadGrowth(binary, receivedGrowth[i]);
                 int count = binary.ReadInt32();
@@ -271,7 +280,8 @@ internal sealed class FuchuOnlineTerritorySync : IDisposable
                     changes.Add((id, item));
                 }
                 if (stream.Position != stream.Length) throw new InvalidDataException("Invalid gameplay payload");
-                State.MatchStarted = matchStarted; State.MatchFinished = matchFinished; State.MatchDeadline = matchDeadline;
+                State.MatchStarted = matchStarted; State.MatchFinished = matchFinished;
+                State.MatchStartAt = matchStartAt; State.MatchDeadline = matchDeadline;
                 for (int i = 0; i < 5; i++)
                 {
                     var target = State.Players[i]; var source = receivedGrowth[i];
